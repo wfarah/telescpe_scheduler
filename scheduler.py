@@ -16,6 +16,8 @@ import tempfile
 
 DEFAULT_TZ = "US/Pacific"
 PROJECTID_FNAME = "./projects.json"
+BACKENDS_FNAME = "./backends.json"
+POSTPROCESSORS_FNAME = "./postprocessors.json"
 
 TITLE_FONT = ("Helvetica", 18)
 NORMAL_FONT = ("Helvetica", 14)
@@ -144,6 +146,9 @@ class TelescopeSchedulerApp:
 
         # load project IDs
         self.load_project_id_json()
+        self.load_backends_json()
+        self.load_postprocessors_json()
+
 
         # Configure the root grid layout to have two columns
         #self.root.grid_columnconfigure(0, weight=1)  # Left frame
@@ -224,7 +229,7 @@ class TelescopeSchedulerApp:
         self.to_enable_disable.append(delete_button)
 
         # Error display label
-        self.obs_status = tk.Label(self.frame_left, text="", fg="green", font=('Helvetica', 16))
+        self.obs_status = tk.Label(self.frame_left, text="", font=('Helvetica', 16))
         self.obs_status.grid(row=4, column=1, padx=10, pady=10)
         #self.obs_status.config(text="Bla, bla")
 
@@ -357,8 +362,9 @@ class TelescopeSchedulerApp:
         projectid_label = tk.Label(dropdown_frame, text="Project ID:",
                                    font=NORMAL_FONT)
         projectid_label.pack(side=tk.LEFT, padx=5)
-        projectid_options = list(self.projectid_mapping['projectIDs'].keys())
-        self.projectid_dropdown = ttk.Combobox(dropdown_frame, values=projectid_options, width=4, state = 'readonly',
+        projectid_options = list(self.projectid_mapping.keys())
+        self.projectid_dropdown = ttk.Combobox(dropdown_frame, values=projectid_options, width=4,
+                state = 'readonly',
                 font=FILL_FONT)  # Adjusted width
         self.projectid_dropdown.pack(side=tk.LEFT, padx=5)
         self.to_enable_disable.append(self.projectid_dropdown)
@@ -369,7 +375,8 @@ class TelescopeSchedulerApp:
                                  font=NORMAL_FONT)
         backend_label.pack(side=tk.LEFT, padx=5)
         backend_options = []
-        self.backend_dropdown = ttk.Combobox(dropdown_frame, values=backend_options, width=15, state = 'readonly',
+        self.backend_dropdown = ttk.Combobox(dropdown_frame, values=backend_options,
+                width=15, state = 'readonly',
                 font=FILL_FONT)  # Adjusted width
         self.backend_dropdown.pack(side=tk.LEFT, padx=5)
         self.to_enable_disable.append(self.backend_dropdown)
@@ -379,7 +386,8 @@ class TelescopeSchedulerApp:
         postprocessor_label = tk.Label(dropdown_frame, text="Postprocessor:", font=NORMAL_FONT)
         postprocessor_label.pack(side=tk.LEFT, padx=5)
         postprocessor_options = []
-        self.postprocessor_dropdown = ttk.Combobox(dropdown_frame, values=postprocessor_options, width=15, state = 'readonly',
+        self.postprocessor_dropdown = ttk.Combobox(dropdown_frame, values=postprocessor_options,
+                width=15, state = 'readonly',
                 font=FILL_FONT)  # Adjusted width
         self.postprocessor_dropdown.pack(side=tk.LEFT, padx=5)
         self.to_enable_disable.append(self.postprocessor_dropdown)
@@ -739,9 +747,18 @@ class TelescopeSchedulerApp:
                 # user didn't want to save, disregarding
                 pass
 
+        # load project IDs
+        self.load_project_id_json()
+        self.load_backends_json()
+        self.load_postprocessors_json()
+
         self.projectid_dropdown.set("")
+        self.projectid_dropdown['values'] = list(self.projectid_mapping.keys())
+
         self.backend_dropdown.set("")
+        self.backend_dropdown['values'] = []
         self.postprocessor_dropdown.set("")
+        self.postprocessor_dropdown['values'] = []
 
         self.tuning_a.delete(0, tk.END)
         self.tuning_b.delete(0, tk.END)
@@ -889,8 +906,8 @@ class TelescopeSchedulerApp:
         }
         return data
 
-    def write_status(self, text):
-        self.obs_status.config(text=text, font=NORMAL_FONT)
+    def write_status(self, text, fg='green'):
+        self.obs_status.config(text=text, fg=fg, font=NORMAL_FONT)
     
     def execute_schedule(self):
         self.interrupt_flag = False
@@ -954,23 +971,55 @@ class TelescopeSchedulerApp:
         with open(projectid_fname, 'r') as json_file:
             self.projectid_mapping = json.load(json_file)
 
+    def load_backends_json(self, backends_fname=BACKENDS_FNAME):
+        with open(backends_fname, 'r') as json_file:
+            self.backends_mapping = json.load(json_file)
+
+    def load_postprocessors_json(self, postprocessors_fname=POSTPROCESSORS_FNAME):
+        with open(postprocessors_fname, 'r') as json_file:
+            self.postprocessors_mapping = json.load(json_file)
+
     def update_backend_combobox(self, event=None):
         self.postprocessor_dropdown.set('')
+        self.postprocessor_dropdown['values'] = []
         self.backend_dropdown.set('')
-        self.root.update()
-        project_id = self.projectid_dropdown.get()
-        values = list(self.projectid_mapping['projectIDs'][project_id]['Backend'].keys())
+        self.backend_dropdown['values'] = []
 
-        self.backend_dropdown['values'] = list(values)
+        self.root.update()
+
+        project_id = self.projectid_dropdown.get()
+        backends = list(self.projectid_mapping[project_id]['Backend'].keys())
+
+        self.load_backends_json()
+
+        for backend in backends:
+            if backend not in self.backends_mapping.keys():
+                self.write_status(f"'{backend}' not in backends.json file, please define it...",
+                        fg='red')
+                raise RuntimeError("Backend doesn't exist in config")
+
+        self.backend_dropdown['values'] = backends
         self.root.update()
 
     def update_postprocessor_combobox(self, event=None):
         self.postprocessor_dropdown.set('')
+        self.postprocessor_dropdown['values'] = []
         self.root.update()
+
         project_id = self.projectid_dropdown.get()
         backend = self.backend_dropdown.get()
-        postprocessors = list(self.projectid_mapping['projectIDs'][project_id]['Backend'][backend]['Postprocessor'])
+        postprocessors = list(self.projectid_mapping[project_id]['Backend'][backend]['Postprocessor'])
+
+        self.load_postprocessors_json()
+
+        for postprocessor in postprocessors:
+            if postprocessor not in self.postprocessors_mapping.keys():
+                self.write_status(f"'{postprocessor}' not in postprocessors.json file, please define it...",
+                        fg='red')
+                raise RuntimeError("Postprocessor doesn't exist in config")
+
         self.postprocessor_dropdown['values'] = postprocessors
+        self.root.update()
 
 
     def start_progress_bar_indefinite(self):
