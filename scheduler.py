@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 import pytz
 from parse import parse
 
+from SNAPobs import snap_config
+
 import os
 import tempfile
 
@@ -52,7 +54,7 @@ class DropdownWithCheckboxes(tk.Frame):
         self.checkbox_frame.pack(fill="both", expand=True)
 
         # Canvas for scrolling
-        self.canvas = tk.Canvas(self.checkbox_frame, height=150, width=150,
+        self.canvas = tk.Canvas(self.checkbox_frame, height=150, width=80,
                         bd=4, relief=tk.RIDGE)  # Set fixed size for scrollable area
         self.canvas.pack(side="left", fill="both", expand=True)
 
@@ -68,14 +70,26 @@ class DropdownWithCheckboxes(tk.Frame):
         self.canvas.create_window((0, 0), window=self.inner_frame, anchor="nw")
 
         # Populate checkboxes
+        self.update_options(self.options)
+
+    def update_options(self, options):
+        # Clear existing checkboxes and variables
+        for widget in self.inner_frame.winfo_children():
+            widget.destroy()
+        self.vars.clear()
+
+        # Add new options and their checkboxes
+        self.options = options
         for option in self.options:
-            var = tk.BooleanVar()
+            var = tk.BooleanVar(value=True)
             self.vars[option] = var
-            chk = tk.Checkbutton(self.inner_frame, text=option, variable=var, font=NORMAL_FONT)
+            chk = tk.Checkbutton(self.inner_frame, text=option, variable=var,
+                    font=NORMAL_FONT)
             chk.pack(anchor="w", padx=5)
-        
-        # Update scroll region to fit content
+
+        # Update the scroll region to fit content
         self.update_scrollregion()
+
 
     def update_scrollregion(self):
         # Update the scrollable region to encompass all checkboxes
@@ -95,20 +109,20 @@ class DropdownWithCheckboxes(tk.Frame):
             self.update_scrollregion()
 
             # Bind a global click event to close the dropdown if clicked outside
-            self.root.bind("<Button-1>", self.click_outside)
+            self.root.bind_all("<Button-1>", self.click_outside)
             # Bind Escape key to root to close the dropdown
-            self.root.bind("<Escape>", lambda e: self.hide_menu())
+            self.root.bind_all("<Escape>", lambda e: self.hide_menu())
 
     def hide_menu(self):
         # Hide the dropdown menu and unbind the click event
         self.menu_window.withdraw()
-        self.root.unbind("<Button-1>")  # Unbind click event when hiding menu
-        self.root.unbind("<Escape>")    # Unbind Escape key when hiding menu
+        self.root.unbind_all("<Button-1>")  # Unbind click event when hiding menu
+        self.root.unbind_all("<Escape>")    # Unbind Escape key when hiding menu
 
     def click_outside(self, event):
         # Check if the click was outside the dropdown menu
         if not (self.menu_window.winfo_rootx() <= event.x_root <= self.menu_window.winfo_rootx() + self.menu_window.winfo_width() and
-                self.menu_window.winfo_rooty() <= event.y_root <= self.menu_window.winfo_rooty() + self.menu_window.winfo_height()):
+                self.menu_window.winfo_rooty() - self.button.winfo_height() <= event.y_root <= self.menu_window.winfo_rooty() + self.menu_window.winfo_height()):
             self.hide_menu()
 
     def get_selected_options(self):
@@ -288,12 +302,16 @@ class TelescopeSchedulerApp:
         antenna_inner_frame = tk.Frame(self.antenna_frame)
         antenna_inner_frame.pack(fill=tk.X, padx=10, pady=10)
 
-        options = [f"Option {i}" for i in range(1, 31)]
-        dropdown = DropdownWithCheckboxes(antenna_inner_frame, options,
+        options = ["tmp1", "tmp2"]
+        self.antenna_dropdown = DropdownWithCheckboxes(antenna_inner_frame, options,
                                           text="Antennas", bg="lightblue")
-        dropdown.pack(side=tk.LEFT, padx=5, pady=5)
+        self.antenna_dropdown.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.antenna_button = tk.Button(antenna_inner_frame, text="Refresh Antenna list", font=NORMAL_FONT, bg="lightblue")
+        self.antenna_button = tk.Button(antenna_inner_frame, 
+                text="Refresh Antenna list", font=NORMAL_FONT, bg="lightblue",
+                command=self.refresh_antenna_list)
+        self.refresh_antenna_list()
+
         self.antenna_button.pack(padx=5, pady=5)
         self.to_enable_disable.append(self.antenna_button)
 
@@ -510,6 +528,10 @@ class TelescopeSchedulerApp:
         self.to_enable_disable.append(self.rf_gain_checkbox)
         self.to_enable_disable.append(self.if_gain_checkbox)
         self.to_enable_disable.append(self.eq_level_checkbox)
+
+    def refresh_antenna_list(self):
+        ant_list = snap_config.get_rfsoc_active_antlist()
+        self.antenna_dropdown.update_options(ant_list)
 
     def add_backend_setup(self):
         # Get selected values from dropdown menus
