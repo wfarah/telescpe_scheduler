@@ -1,0 +1,57 @@
+{
+    "projectIDs": {
+        "p000": {
+            "Backend": {
+                "xGPU_10s": {
+                    "Postprocessor": [
+                        "cp_uvh5"
+                    ]
+                },
+                "xGPU_30s": {
+                    "Postprocessor": [
+                        "cp_uvh5_p001"
+                    ]
+                }
+            }
+        },
+        "p001": {
+            "Backend": {
+                "xGPU_10s": {
+                    "Postprocessor": [
+                        "cp_uvh5_p001",
+                        "cp_uvh5_2_p001"
+                    ]
+                },
+                "xGPU_30s": {
+                    "Postprocessor": [
+                        "cp_uvh5_p001"
+                    ]
+                }
+            }
+        },
+        "p002": {
+            "Backend": {
+                "xGPU_10s": {
+                    "Postprocessor": [
+                        "cp_uvh5_p002",
+                        "cp_uvh5_2_p002"
+                    ]
+                },
+                "xGPU_30s": {
+                    "Postprocessor": [
+                        "cp_uvh5_p002"
+                    ]
+                }
+            }
+        },
+        "p003": {
+            "Backend": {
+                "BLADE_A_64us": {
+                    "Postprocessor": [
+                        "cp_fil_p003"
+                    ]
+                }
+            }
+        }
+    }
+}
