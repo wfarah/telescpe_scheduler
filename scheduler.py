@@ -1,11 +1,12 @@
 import tkinter as tk
 from tkinter import ttk
 from tkinter import filedialog, messagebox
+from tkcalendar import DateEntry
 from PIL import Image, ImageTk
 import json
 import time
 
-from datetime import datetime, timezone
+import datetime
 import pytz
 from parse import parse
 
@@ -291,7 +292,7 @@ class TelescopeSchedulerApp:
         self.antenna_observer_frame = tk.Frame(self.frame_right)
         self.backend_frame = tk.Frame(self.frame_right, bd=2, relief=tk.SUNKEN)
         self.frequency_frame = tk.Frame(self.frame_right, bd=2, relief=tk.SUNKEN)
-        self.source_frame = tk.Frame(self.frame_right, bd=2, relief=tk.SUNKEN)
+        self.source_frame = tk.Frame(self.frame_right)
         self.button_frame = tk.Frame(self.frame_right, bd=2, relief=tk.SUNKEN)
 
         # Pack the frames with some padding
@@ -443,16 +444,22 @@ class TelescopeSchedulerApp:
         # Frequency frame with tuning inputs and checkboxes
         self.setup_frequency_frame()
 
+        source_frame_left = tk.Frame(self.source_frame, bd=2, relief=tk.SUNKEN)
+        source_frame_left.pack(fill="both", expand=True, side=tk.LEFT, pady=2)
+
+        source_frame_right = tk.Frame(self.source_frame, bd=2, relief=tk.SUNKEN)
+        source_frame_right.pack(fill=tk.Y, expand=True, side=tk.LEFT, pady=2)
+
         # Source frame - Placeholder
-        source_label = tk.Label(self.source_frame, text="Source Names and Observation Times", font=TITLE_FONT)
+        source_label = tk.Label(source_frame_left, text="Source Name and Observation Times", font=TITLE_FONT)
         source_label.pack(pady=10)
 
         # Create a new frame to hold the labels and text boxes side by side
-        source_frame_inner = tk.Frame(self.source_frame)
+        source_frame_inner = tk.Frame(source_frame_left)
         source_frame_inner.pack(fill=tk.X, padx=10, pady=10)
 
         # Add "Source Name" label and text box
-        source_name_label = tk.Label(source_frame_inner, text="Source Name:", font=NORMAL_FONT)
+        source_name_label = tk.Label(source_frame_inner, text="Source:", font=NORMAL_FONT)
         source_name_label.pack(side=tk.LEFT, padx=5)
         self.source_name_entry = tk.Entry(source_frame_inner, width=12, font=NORMAL_FONT)
         self.source_name_entry.pack(side=tk.LEFT, padx=5)
@@ -462,12 +469,12 @@ class TelescopeSchedulerApp:
         obs_time_label = tk.Label(source_frame_inner, text="Obs Time:",
                                   font=NORMAL_FONT)
         obs_time_label.pack(side=tk.LEFT, padx=5)
-        self.obs_time_entry = tk.Entry(source_frame_inner, width=8,
+        self.obs_time_entry = tk.Entry(source_frame_inner, width=6,
                                        font=NORMAL_FONT)
         self.obs_time_entry.pack(side=tk.LEFT, padx=5)
         self.to_enable_disable.append(self.obs_time_entry)
 
-        source_frame_inner2 = tk.Frame(self.source_frame)
+        source_frame_inner2 = tk.Frame(source_frame_left)
         source_frame_inner2.pack(fill=tk.X, padx=10, pady=10)
 
         # Add button to add source and observation time to the listbox
@@ -480,7 +487,63 @@ class TelescopeSchedulerApp:
                                         font=NORMAL_FONT,
                                         bg="lightblue")
         self.to_enable_disable.append(park_antenna_button)
-        park_antenna_button.pack(side=tk.LEFT, padx=5)
+        park_antenna_button.pack(side=tk.RIGHT, padx=5)
+
+        wait_frame_1 = tk.Frame(source_frame_right)
+        wait_frame_1.pack(fill=tk.X, padx=2, pady=5)
+
+        wait_frame_2 = tk.Frame(source_frame_right)
+        wait_frame_2.pack(fill=tk.X, padx=2, pady=5)
+
+        wait_frame_3 = tk.Frame(source_frame_right)
+        wait_frame_3.pack(fill=tk.X, padx=2, pady=5)
+
+        wait_frame_4 = tk.Frame(source_frame_right)
+        wait_frame_4.pack(fill=tk.X, padx=2, pady=5)
+
+        self.wait_time_button = tk.Button(wait_frame_1, text="Wait until", font=NORMAL_FONT,
+                bg="lightblue")
+        self.wait_time_button.pack(side=tk.LEFT, padx=5)
+
+        wait_frame_1_dt = tk.Frame(wait_frame_1)
+        wait_frame_1_dt.pack(fill=tk.X, padx=2, pady=2)
+
+        self.tz_dropdown = ttk.Combobox(wait_frame_1_dt, values=pytz.all_timezones,
+                font=NORMAL_FONT, state="readonly", width=16)
+        self.tz_dropdown.pack(fill=tk.X, padx=2, pady=2)
+        self.tz_dropdown.option_add('*TCombobox*Listbox.font', NORMAL_FONT)
+        self.tz_dropdown.set(DEFAULT_TZ)
+
+        # Get time now to fill in defaults
+        dt_now = datetime.datetime.now(
+                tz=pytz.timezone(self.tz_dropdown.get()))
+        hh_now, mm_now = dt_now.hour, dt_now.minute
+
+        self.date_entry = DateEntry(wait_frame_2, width=8, background='darkblue',
+                        foreground='white', borderwidth=2, font=NORMAL_FONT)
+        self.date_entry.pack(side=tk.LEFT, pady=2, padx=5)
+
+        self.hours_spin = tk.Spinbox(wait_frame_2, from_=2, to=23, width=3, increment=1,
+            format="%02.0f", font=NORMAL_FONT, textvariable=tk.IntVar(value=hh_now))
+        self.minutes_spin = tk.Spinbox(wait_frame_2, from_=0, to=59, width=3, increment=1,
+            format="%02.0f", font=NORMAL_FONT, textvariable=tk.IntVar(value=mm_now))
+        self.hours_spin.pack(side=tk.LEFT, padx=5)
+        self.minutes_spin.pack(side=tk.LEFT)
+
+        self.reset_time_button = tk.Button(wait_frame_2, font=FILL_FONT, text="now",
+                command=self.reset_time)
+        self.reset_time_button.pack(side=tk.RIGHT, pady=2, padx=5)
+        self.reset_time()
+
+        self.wait_until_button = tk.Button(wait_frame_3, text="Wait for prompt", font=NORMAL_FONT,
+                bg="lightblue", width=12)
+        self.wait_until_button.pack(side=tk.LEFT, padx=5)
+
+        self.wait_for_button = tk.Button(wait_frame_4, text="Wait for:", font=NORMAL_FONT,
+                bg="lightblue")
+        self.wait_for_button.pack(side=tk.LEFT, padx=5)
+        self.wait_for_entry = tk.Entry(wait_frame_4, font=NORMAL_FONT, width=5)
+        self.wait_for_entry.pack(side=tk.LEFT, padx=5)
 
         # Button frame - Two buttons
         check_button = tk.Button(self.button_frame, text="Check Schedule", width=15,
@@ -648,6 +711,17 @@ class TelescopeSchedulerApp:
         else:
             print("Please enter both source name and observation time.")
 
+    def reset_time(self):
+        dt_now = datetime.datetime.now(
+                tz=pytz.timezone(self.tz_dropdown.get()))
+        hh_now, mm_now = dt_now.hour, dt_now.minute
+
+        self.date_entry.set_date(dt_now)
+        self.hours_spin.delete(0, tk.END)
+        self.minutes_spin.delete(0, tk.END)
+        self.hours_spin.insert(0, f'{hh_now:02}')
+        self.minutes_spin.insert(0, f'{mm_now:02}')
+
     def add_park_command(self):
         entry = f"--      PARK    -- Az,el = (0, 180) "
         self.listbox.insert(tk.END, entry)
@@ -668,8 +742,6 @@ class TelescopeSchedulerApp:
         if selected:
             for index in selected[::-1]:  # Reverse order to avoid index shifting issues while deleting
                 self.listbox.delete(index)
-        else:
-            print("Please select entries to delete.")
 
     def reset_selection(self, event=None):
         """Reset the selection of the listbox."""
@@ -918,7 +990,7 @@ class TelescopeSchedulerApp:
         self.enable_everything()
 
     def generate_planner(self):
-        dt = datetime.now(tz=pytz.timezone(DEFAULT_TZ))
+        dt = datetime.datetime.now(tz=pytz.timezone(DEFAULT_TZ))
         start_date = dt.strftime("%m/%d/%y")
         start_time = dt.strftime("%H:%M")
 
