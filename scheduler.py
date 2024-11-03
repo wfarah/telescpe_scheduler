@@ -288,24 +288,55 @@ class TelescopeSchedulerApp:
 
     def setup_right_frame(self):
         # Create 4 sub-frames within the right frame
-        self.antenna_frame = tk.Frame(self.frame_right, bd=2, relief=tk.SUNKEN)
+        self.antenna_observer_frame = tk.Frame(self.frame_right)
         self.backend_frame = tk.Frame(self.frame_right, bd=2, relief=tk.SUNKEN)
         self.frequency_frame = tk.Frame(self.frame_right, bd=2, relief=tk.SUNKEN)
         self.source_frame = tk.Frame(self.frame_right, bd=2, relief=tk.SUNKEN)
         self.button_frame = tk.Frame(self.frame_right, bd=2, relief=tk.SUNKEN)
 
         # Pack the frames with some padding
-        self.antenna_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.antenna_observer_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         self.backend_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         self.frequency_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         self.source_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         self.button_frame.pack(fill=tk.X, padx=10, pady=10)
 
+        self.antenna_frame = tk.Frame(self.antenna_observer_frame, bd=2, relief=tk.SUNKEN)
+        self.antenna_frame.pack(fill=tk.Y, expand=True, side=tk.LEFT, pady=2)
+
         antenna_label = tk.Label(self.antenna_frame, text="Select Antennas", font=TITLE_FONT)
-        antenna_label.pack(pady=10)
+        antenna_label.pack(fill=tk.X, pady=2)
 
         antenna_inner_frame = tk.Frame(self.antenna_frame)
-        antenna_inner_frame.pack(fill=tk.X, padx=10, pady=10)
+        antenna_inner_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self.observer_frame = tk.Frame(self.antenna_observer_frame, bd=2, relief=tk.SUNKEN)
+        self.observer_frame.pack(pady=5, padx=5, fill=tk.Y, expand=True)
+
+        oic_frame = tk.Frame(self.observer_frame)
+        oic_frame.pack(pady=5, padx=5)
+        observer_label = tk.Label(oic_frame, text="Observer in Charge:",
+                font=NORMAL_FONT)
+        observer_label.pack(side=tk.LEFT, pady=5)
+
+        self.observer = tk.Entry(oic_frame, font=NORMAL_FONT, width=20)
+        self.observer.pack(pady=5)
+
+        self.oic_frame = tk.Frame(self.observer_frame)
+        self.oic_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self.register_oic_button = tk.Button(self.observer_frame,
+                text="Register as OIC", bg="lightblue", font=NORMAL_FONT,
+                command=self.register_oic)
+        self.register_oic_button.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.deregister_oic_button = tk.Button(self.observer_frame,
+                text="Deregister", bg="orange", font=NORMAL_FONT,
+                command=self.deregister_oic)
+        self.deregister_oic_button.pack(side=tk.RIGHT, padx=5, pady=5)
+        self.deregister_oic()
+        self.to_enable_disable.append(self.deregister_oic_button)
+
 
         options = ["tmp1", "tmp2"]
         self.antenna_dropdown = DropdownWithCheckboxes(antenna_inner_frame, options,
@@ -541,6 +572,17 @@ class TelescopeSchedulerApp:
         ant_list = snap_config.get_rfsoc_active_antlist()
         self.antenna_dropdown.update_options(ant_list)
 
+    def register_oic(self):
+        if self.observer.get():
+            self.observer.config(state=tk.DISABLED)
+            self.register_oic_button.config(state=tk.DISABLED)
+            self.registered_observer = self.observer.get()
+
+    def deregister_oic(self):
+        self.observer.config(state=tk.NORMAL)
+        self.register_oic_button.config(state=tk.NORMAL)
+        self.registered_observer = ""
+
     def add_backend_setup(self):
         # Get selected values from dropdown menus
         project_id = self.projectid_dropdown.get()
@@ -746,6 +788,9 @@ class TelescopeSchedulerApp:
             if not response:
                 # user didn't want to save, disregarding
                 pass
+
+        self.deregister_oic()
+        self.observer.delete(0, tk.END)
 
         # load project IDs
         self.load_project_id_json()
