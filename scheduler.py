@@ -267,20 +267,20 @@ class TelescopeSchedulerApp:
 
         # Add File menu to the menubar 
         file_menu = tk.Menu(self.menu_bar, tearoff=0)
-        self.menu_bar.add_cascade(label="File", menu=file_menu, font=("Helvetica", 14))
-        file_menu.add_command(label="New", command=self.new_schedule)
-        file_menu.add_command(label="Open", command=self.open_schedule)
-        file_menu.add_command(label="Save", command=self.save_schedule)
+        self.menu_bar.add_cascade(label="File", menu=file_menu, font=NORMAL_FONT)
+        file_menu.add_command(label="New", command=self.new_schedule, font=NORMAL_FONT)
+        file_menu.add_command(label="Open", command=self.open_schedule, font=NORMAL_FONT)
+        file_menu.add_command(label="Save", command=self.save_schedule, font=NORMAL_FONT)
         file_menu.add_separator()
-        file_menu.add_command(label="Quit", command=self.check_if_modified_and_quit)
+        file_menu.add_command(label="Quit", command=self.check_if_modified_and_quit, font=NORMAL_FONT)
 
 
         # Add Help menu to the menubar
         help_menu = tk.Menu(self.menu_bar, tearoff=0)
-        self.menu_bar.add_cascade(label="Help", menu=help_menu, font=("Helvetica", 14))
-        help_menu.add_command(label="How to Use", command=self.show_help)
+        self.menu_bar.add_cascade(label="Help", menu=help_menu, font=NORMAL_FONT)
+        help_menu.add_command(label="How to Use", command=self.show_help, font=NORMAL_FONT)
         help_menu.add_separator()
-        help_menu.add_command(label="About")
+        help_menu.add_command(label="About", font=NORMAL_FONT)
 
         # check if schedule is modified before exiting
         self.root.protocol("WM_DELETE_WINDOW", self.check_if_modified_and_quit)
@@ -435,7 +435,8 @@ class TelescopeSchedulerApp:
         #self.int_length_entry.config(state=tk.DISABLED)
 
         # Button to add backend setup
-        add_backend_button = tk.Button(self.backend_frame, text="Add Backend Setup", command=self.add_backend_setup, font=NORMAL_FONT, bg="lightblue")
+        add_backend_button = tk.Button(self.backend_frame, text="Add Backend Setup",
+                command=self.add_backend_setup, font=NORMAL_FONT, bg="lightblue")
         add_backend_button.pack(pady=10)
         self.to_enable_disable.append(add_backend_button)
 
@@ -569,7 +570,7 @@ class TelescopeSchedulerApp:
         self.to_enable_disable.append(self.eq_level_checkbox)
 
     def refresh_antenna_list(self):
-        ant_list = snap_config.get_rfsoc_active_antlist()
+        ant_list = sorted(snap_config.get_rfsoc_active_antlist())
         self.antenna_dropdown.update_options(ant_list)
 
     def register_oic(self):
