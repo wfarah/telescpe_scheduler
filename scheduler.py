@@ -15,6 +15,10 @@ from SNAPobs import snap_config
 import os
 import tempfile
 
+from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
+
+
 DEFAULT_TZ = "US/Pacific"
 PROJECTID_FNAME = "./projects.json"
 BACKENDS_FNAME = "./backends.json"
@@ -23,6 +27,22 @@ POSTPROCESSORS_FNAME = "./postprocessors.json"
 TITLE_FONT = ("Helvetica", 18)
 NORMAL_FONT = ("Helvetica", 14)
 FILL_FONT = ("Helvetica", 12)
+
+
+def send_slack_message(token, channel, text):
+    """
+    Function to send a text message to a slack channel using an auth token
+    """
+    client = WebClient(token=token)
+
+    try:
+        response = client.chat_postMessage(
+            channel=channel,
+            text=text
+        )
+    except SlackApiError as e:
+        # Handle the exception if there was an error
+        raise e
 
 
 class DropdownWithCheckboxes(tk.Frame):
@@ -150,6 +170,7 @@ class TelescopeSchedulerApp:
         self.load_backends_json()
         self.load_postprocessors_json()
 
+        self.enable_slack = True
 
         # Configure the root grid layout to have two columns
         #self.root.grid_columnconfigure(0, weight=1)  # Left frame
@@ -330,6 +351,7 @@ class TelescopeSchedulerApp:
                 text="Register as OIC", bg="lightblue", font=NORMAL_FONT,
                 command=self.register_oic)
         self.register_oic_button.pack(side=tk.LEFT, padx=5, pady=5)
+        self.registered_observer = ""
 
         self.deregister_oic_button = tk.Button(self.observer_frame,
                 text="Deregister", bg="orange", font=NORMAL_FONT,
@@ -642,9 +664,46 @@ class TelescopeSchedulerApp:
             self.register_oic_button.config(state=tk.DISABLED)
             self.registered_observer = self.observer.get()
 
+            # Get slack token and channel_id
+            slack_token = os.environ.get("ATATOKEN", "")
+            channel_id = os.environ.get("ATACHANNEL", "")
+            oic = self.registered_observer
+            emoji = ":large_green_circle:"
+            message_text = f'{emoji} Observer *`{oic}`* registered as Observer In Charge {emoji}'
+
+            if self.enable_slack:
+                try:
+                    send_slack_message(slack_token, channel_id, message_text)
+                    self.write_status(f'Observer {oic} registered as OIC',
+                            fg='green')
+                except Exception as e:
+                    self.write_status(f'Could not send OIC message to slack',
+                            fg='red')
+                    print(e)
+
+
     def deregister_oic(self):
         self.observer.config(state=tk.NORMAL)
         self.register_oic_button.config(state=tk.NORMAL)
+
+        oic = self.registered_observer
+
+        if oic and self.enable_slack:
+            # Get slack token and channel_id
+            slack_token = os.environ.get("ATATOKEN", "")
+            channel_id = os.environ.get("ATACHANNEL", "")
+            emoji = ":large_red_square:"
+            message_text = f'{emoji} Observer *`{oic}`* de-registered as Observer In Charge {emoji}'
+
+            try:
+                self.write_status(f'Observer {OIC} de-registered as OIC',
+                        fg='green')
+                send_slack_message(slack_token, channel_id, message_text)
+            except Exception as e:
+                self.write_status(f'Could not send deregister OIC message to slack',
+                        fg='green')
+                print(e)
+
         self.registered_observer = ""
 
     def add_backend_setup(self):
