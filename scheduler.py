@@ -24,6 +24,8 @@ PROJECTID_FNAME = "./projects.json"
 BACKENDS_FNAME = "./backends.json"
 POSTPROCESSORS_FNAME = "./postprocessors.json"
 
+ENABLE_SLACK = False
+
 TITLE_FONT = ("Helvetica", 18)
 NORMAL_FONT = ("Helvetica", 14)
 FILL_FONT = ("Helvetica", 12)
@@ -170,7 +172,7 @@ class TelescopeSchedulerApp:
         self.load_backends_json()
         self.load_postprocessors_json()
 
-        self.enable_slack = True
+        self.enable_slack = ENABLE_SLACK
 
         # Configure the root grid layout to have two columns
         #self.root.grid_columnconfigure(0, weight=1)  # Left frame
@@ -523,7 +525,8 @@ class TelescopeSchedulerApp:
         wait_frame_4 = tk.Frame(source_frame_right)
         wait_frame_4.pack(fill=tk.X, padx=2, pady=5)
 
-        self.wait_time_button = tk.Button(wait_frame_1, text="Wait until", font=NORMAL_FONT,
+        self.wait_time_button = tk.Button(wait_frame_1, text="Wait until", 
+                font=NORMAL_FONT, command=self.wait_until,
                 bg="lightblue")
         self.wait_time_button.pack(side=tk.LEFT, padx=5)
 
@@ -557,11 +560,13 @@ class TelescopeSchedulerApp:
         self.reset_time_button.pack(side=tk.RIGHT, pady=2, padx=5)
         self.reset_time()
 
-        self.wait_until_button = tk.Button(wait_frame_3, text="Wait for prompt", font=NORMAL_FONT,
+        self.wait_until_button = tk.Button(wait_frame_3, text="Wait for prompt", 
+                font=NORMAL_FONT, command=self.wait_for_prompt,
                 bg="lightblue", width=12)
         self.wait_until_button.pack(side=tk.LEFT, padx=5)
 
-        self.wait_for_button = tk.Button(wait_frame_4, text="Wait for:", font=NORMAL_FONT,
+        self.wait_for_button = tk.Button(wait_frame_4, text="Wait for:", 
+                font=NORMAL_FONT, command=self.wait_for_seconds,
                 bg="lightblue")
         self.wait_for_button.pack(side=tk.LEFT, padx=5)
         self.wait_for_entry = tk.Entry(wait_frame_4, font=NORMAL_FONT, width=5)
@@ -1197,6 +1202,23 @@ class TelescopeSchedulerApp:
 
         self.postprocessor_dropdown['values'] = postprocessors
         self.root.update()
+
+
+    def wait_until(self, event=None):
+        entry = f"--    WAIT   -- Until "
+        self.listbox.insert(tk.END, entry)
+
+
+    def wait_for_prompt(self, event=None):
+        entry = f"--    WAIT   -- For prompt "
+        self.listbox.insert(tk.END, entry)
+        pass
+
+
+    def wait_for_seconds(self, event=None):
+        entry = f"--    WAIT   -- For X seconds "
+        self.listbox.insert(tk.END, entry)
+        pass
 
 
     def start_progress_bar_indefinite(self):
