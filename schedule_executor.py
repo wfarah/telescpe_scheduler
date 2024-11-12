@@ -5,6 +5,25 @@ import time
 
 from ATATools import ata_control, logger_defaults, ata_if
 
+
+PROJECTID_FNAME = "./projects.json"
+BACKENDS_FNAME = "./backends.json"
+POSTPROCESSORS_FNAME = "./postprocessors.json"
+
+
+def load_project_id_json(projectid_fname=PROJECTID_FNAME):
+    with open(projectid_fname, 'r') as json_file:
+        self.projectid_mapping = json.load(json_file)
+
+def load_backends_json(backends_fname=BACKENDS_FNAME):
+    with open(backends_fname, 'r') as json_file:
+        self.backends_mapping = json.load(json_file)
+
+def load_postprocessors_json(postprocessors_fname=POSTPROCESSORS_FNAME):
+    with open(postprocessors_fname, 'r') as json_file:
+        self.postprocessors_mapping = json.load(json_file)
+
+
 class Executable(ABC):
     def __init__(self, config):
         self.config = config
@@ -65,8 +84,23 @@ class SetFreqTunning(Executable):
         if self.config['eq_level']:
             pass
 
+
+class SetBackend(Executable):
+    def __init__(self):
+        needed_keys = ["ant_list", "ProjectID", 
+                "Backend", "Postprocessor"]
+        self.check_consistency(needed_keys)
+
+    def execute(self):
+        projectid_mapping      = load_project_id_json()
+        backends_mapping       = load_backends_json()
+        postprocessors_mapping = load_postprocessors_json()
+
+        # Set backend
+        
+
 class ScheduleExecutor:
-    def __init__(self, action_type, config, write_status=False):
+    def __init__(self, action_type, config, write_status=None):
         self.executor = self._get_executor(action_type, config)
         if write_status:
             self.write_status = write_status
@@ -76,6 +110,8 @@ class ScheduleExecutor:
     def _get_executor(self, action_type, config):
         if action_type == "SET FREQ":
             return SetFreqTunning(config)
+        elif action_type == "BACKEND":
+            return SetBackend(config)
 
     def execute(self):
         self.executor.execute()
