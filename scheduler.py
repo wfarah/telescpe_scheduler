@@ -11,6 +11,7 @@ import pytz
 from parse import parse
 
 from SNAPobs import snap_config
+from SNAPobs.snap_hpguppi import snap_hpguppi_defaults as hpguppi_defaults
 
 import os
 import tempfile
@@ -31,6 +32,24 @@ NORMAL_FONT = ("Helvetica", 14)
 FILL_FONT = ("Helvetica", 12)
 
 
+def hashpipe_targets_to_list(hp_targets):
+    hp_list = []
+    for key in hp_targets.keys():
+        hp_list += [key + "." + str(i) for i in hp_targets[key]]
+    return hp_list
+
+def list_to_hashpipe_targets(hp_list):
+    hp_targets = {}
+    for i in l:
+        seti_node, instance = i.split(".")
+        if seti_node in hp_targets.keys():
+            hp_targets[seti_node].append(int(instance))
+        else:
+            hp_targets[seti_node] = [int(instance)]
+
+    return hp_targets
+
+
 def send_slack_message(token, channel, text):
     """
     Function to send a text message to a slack channel using an auth token
@@ -49,7 +68,7 @@ def send_slack_message(token, channel, text):
 
 class DropdownWithCheckboxes(tk.Frame):
     def __init__(self, parent, options, text="Select options",
-                 bg="lightgrey"):
+                 bg="lightgrey", width=80, height=150):
         super().__init__(parent)
         
         # Initialize options and create BooleanVars to track each checkbox's state
@@ -65,6 +84,9 @@ class DropdownWithCheckboxes(tk.Frame):
         self.menu_window = None
         self.root = parent  # Store the parent to bind/unbind global events
 
+        self.height = height
+        self.width  = width
+
         # Add initial checkboxes
         self.create_menu()
 
@@ -79,7 +101,7 @@ class DropdownWithCheckboxes(tk.Frame):
         self.checkbox_frame.pack(fill="both", expand=True)
 
         # Canvas for scrolling
-        self.canvas = tk.Canvas(self.checkbox_frame, height=150, width=80,
+        self.canvas = tk.Canvas(self.checkbox_frame, height=self.height, width=self.width,
                         bd=4, relief=tk.RIDGE)  # Set fixed size for scrollable area
         self.canvas.pack(side="left", fill="both", expand=True)
 
@@ -328,7 +350,7 @@ class TelescopeSchedulerApp:
         self.antenna_frame = tk.Frame(self.antenna_observer_frame, bd=2, relief=tk.SUNKEN)
         self.antenna_frame.pack(fill=tk.Y, expand=True, side=tk.LEFT, pady=2)
 
-        antenna_label = tk.Label(self.antenna_frame, text="Select Antennas", font=TITLE_FONT)
+        antenna_label = tk.Label(self.antenna_frame, text="Select Antennas & Recorders", font=TITLE_FONT)
         antenna_label.pack(fill=tk.X, pady=2)
 
         antenna_inner_frame = tk.Frame(self.antenna_frame)
@@ -368,10 +390,14 @@ class TelescopeSchedulerApp:
                                           text="Antennas", bg="lightblue")
         self.antenna_dropdown.pack(side=tk.LEFT, padx=5, pady=5)
 
+        self.targets_dropdown = DropdownWithCheckboxes(antenna_inner_frame, options,
+                                          text="Recorders", bg="lightblue", width=150)
+        self.targets_dropdown.pack(side=tk.LEFT, padx=5, pady=5)
+
         self.antenna_button = tk.Button(antenna_inner_frame, 
-                text="Refresh Antenna list", font=NORMAL_FONT, bg="lightblue",
-                command=self.refresh_antenna_list)
-        self.refresh_antenna_list()
+                text="Refresh", font=NORMAL_FONT, bg="lightblue",
+                command=self.refresh_ant_targets)
+        self.refresh_ant_targets()
 
         self.antenna_button.pack(padx=5, pady=5)
         self.to_enable_disable.append(self.antenna_button)
@@ -659,9 +685,18 @@ class TelescopeSchedulerApp:
         self.to_enable_disable.append(self.if_gain_checkbox)
         self.to_enable_disable.append(self.eq_level_checkbox)
 
-    def refresh_antenna_list(self):
+    def refresh_ant_targets(self):
+        # get antenna list
         ant_list = sorted(snap_config.get_rfsoc_active_antlist())
         self.antenna_dropdown.update_options(ant_list)
+
+        # get hashpipe recorders
+        d = hpguppi_defaults.hashpipe_targets_LoA.copy()
+        d.update(hpguppi_defaults.hashpipe_targets_LoB)
+
+        d_list = hashpipe_targets_to_list(d)
+        self.targets_dropdown.update_options(d_list)
+
 
     def register_oic(self):
         if self.observer.get():
@@ -701,7 +736,7 @@ class TelescopeSchedulerApp:
             message_text = f'{emoji} Observer *`{oic}`* de-registered as Observer In Charge {emoji}'
 
             try:
-                self.write_status(f'Observer {OIC} de-registered as OIC',
+                self.write_status(f'Observer {oic} de-registered as OIC',
                         fg='green')
                 send_slack_message(slack_token, channel_id, message_text)
             except Exception as e:
@@ -929,6 +964,8 @@ class TelescopeSchedulerApp:
         self.deregister_oic()
         self.observer.delete(0, tk.END)
 
+        self.refresh_ant_targets()
+
         # load project IDs
         self.load_project_id_json()
         self.load_backends_json()
@@ -1012,6 +1049,8 @@ class TelescopeSchedulerApp:
 
         except Exception as e:
             raise e
+
+        self.refresh_ant_targets()
 
         self.original_listbox = self.listbox.get(0, tk.END)
         fname = os.path.basename(filename)
