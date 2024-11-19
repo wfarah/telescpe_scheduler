@@ -367,6 +367,7 @@ class TelescopeSchedulerApp:
 
         self.observer = tk.Entry(oic_frame, font=NORMAL_FONT, width=20)
         self.observer.pack(pady=5)
+        self.to_enable_disable.append(self.observer)
 
         self.oic_frame = tk.Frame(self.observer_frame)
         self.oic_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -389,10 +390,12 @@ class TelescopeSchedulerApp:
         self.antenna_dropdown = DropdownWithCheckboxes(antenna_inner_frame, options,
                                           text="Antennas", bg="lightblue")
         self.antenna_dropdown.pack(side=tk.LEFT, padx=5, pady=5)
+        self.to_enable_disable.append(self.antenna_dropdown.button)
 
         self.targets_dropdown = DropdownWithCheckboxes(antenna_inner_frame, options,
                                           text="Recorders", bg="lightblue", width=150)
         self.targets_dropdown.pack(side=tk.LEFT, padx=5, pady=5)
+        self.to_enable_disable.append(self.targets_dropdown.button)
 
         self.antenna_button = tk.Button(antenna_inner_frame, 
                 text="Refresh", font=NORMAL_FONT, bg="lightblue",
@@ -1131,6 +1134,12 @@ class TelescopeSchedulerApp:
         self.obs_status.config(text=text, fg=fg, font=NORMAL_FONT)
     
     def execute_schedule(self):
+        self.write_status("")
+
+        if self.registered_observer == "":
+            self.write_status("Please register as OIC first", fg='red')
+            return
+
         self.interrupt_flag = False
         self.disable_everything()
         idx = 0
