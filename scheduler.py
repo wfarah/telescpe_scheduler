@@ -157,14 +157,16 @@ class DropdownWithCheckboxes(tk.Frame):
 
             # Bind a global click event to close the dropdown if clicked outside
             self.root.bind_all("<Button-1>", self.click_outside)
+            self.root.bind_all("<FocusOut>", self.hide_menu)
             # Bind Escape key to root to close the dropdown
             self.root.bind_all("<Escape>", lambda e: self.hide_menu())
 
-    def hide_menu(self):
+    def hide_menu(self, event=None):
         # Hide the dropdown menu and unbind the click event
         self.menu_window.withdraw()
         self.root.unbind_all("<Button-1>")  # Unbind click event when hiding menu
         self.root.unbind_all("<Escape>")    # Unbind Escape key when hiding menu
+        self.root.unbind_all("<FocusOut>")
 
     def click_outside(self, event):
         # Check if the click was outside the dropdown menu
