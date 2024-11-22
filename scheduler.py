@@ -5,6 +5,9 @@ from tkcalendar import DateEntry
 from PIL import Image, ImageTk
 import json
 import time
+import threading
+
+from schedule_executor import ScheduleExecutor
 
 import datetime
 import pytz
@@ -40,7 +43,7 @@ def hashpipe_targets_to_list(hp_targets):
 
 def list_to_hashpipe_targets(hp_list):
     hp_targets = {}
-    for i in l:
+    for i in hp_list:
         seti_node, instance = i.split(".")
         if seti_node in hp_targets.keys():
             hp_targets[seti_node].append(int(instance))
@@ -188,6 +191,7 @@ class TelescopeSchedulerApp:
         self.root.geometry("1600x850")
         self.interrupt_flag = False
         self.to_enable_disable = [] #list of everything to enable and disable
+        self.to_readonly_disable = [] # same as above, but return to readonly
 
         self.original_listbox = ()
 
@@ -425,7 +429,7 @@ class TelescopeSchedulerApp:
                                         width=20, state = 'readonly',
                                         font=FILL_FONT)  # Adjusted width
         self.digitizer_mode_dropdown.pack(side=tk.LEFT, padx=5)
-        self.to_enable_disable.append(self.digitizer_mode_dropdown)
+        self.to_readonly_disable.append(self.digitizer_mode_dropdown)
 
         # Button to add digitizer mode setup
         add_digitizer_mode_button = tk.Button(dropdown_frame_digitizer_mode, 
@@ -454,7 +458,7 @@ class TelescopeSchedulerApp:
                 state = 'readonly',
                 font=FILL_FONT)  # Adjusted width
         self.projectid_dropdown.pack(side=tk.LEFT, padx=5)
-        self.to_enable_disable.append(self.projectid_dropdown)
+        self.to_readonly_disable.append(self.projectid_dropdown)
         self.projectid_dropdown.bind('<<ComboboxSelected>>', self.update_backend_combobox)
 
         # Backend Dropdown Menu
@@ -466,7 +470,7 @@ class TelescopeSchedulerApp:
                 width=15, state = 'readonly',
                 font=FILL_FONT)  # Adjusted width
         self.backend_dropdown.pack(side=tk.LEFT, padx=5)
-        self.to_enable_disable.append(self.backend_dropdown)
+        self.to_readonly_disable.append(self.backend_dropdown)
         self.backend_dropdown.bind('<<ComboboxSelected>>', self.update_postprocessor_combobox)
 
         # Postprocessor Dropdown Menu
@@ -477,7 +481,7 @@ class TelescopeSchedulerApp:
                 width=15, state = 'readonly',
                 font=FILL_FONT)  # Adjusted width
         self.postprocessor_dropdown.pack(side=tk.LEFT, padx=5)
-        self.to_enable_disable.append(self.postprocessor_dropdown)
+        self.to_readonly_disable.append(self.postprocessor_dropdown)
 
         # Frame for integration length
         #int_length_frame = tk.Frame(self.backend_frame)
@@ -533,7 +537,8 @@ class TelescopeSchedulerApp:
         source_frame_inner2.pack(fill=tk.X, padx=10, pady=10)
 
         # Add button to add source and observation time to the listbox
-        add_source_button = tk.Button(source_frame_inner2, text="Add Source", command=self.add_source_entry, font=NORMAL_FONT, bg="lightblue")
+        add_source_button = tk.Button(source_frame_inner2, text="Add Source", 
+                command=self.add_source_entry, font=NORMAL_FONT, bg="lightblue")
         self.to_enable_disable.append(add_source_button)
         add_source_button.pack(side=tk.LEFT, padx=10)
 
@@ -560,12 +565,15 @@ class TelescopeSchedulerApp:
                 font=NORMAL_FONT, command=self.wait_until,
                 bg="lightblue")
         self.wait_time_button.pack(side=tk.LEFT, padx=5)
+        self.to_enable_disable.append(self.wait_time_button)
 
         wait_frame_1_dt = tk.Frame(wait_frame_1)
         wait_frame_1_dt.pack(fill=tk.X, padx=2, pady=2)
 
         self.tz_dropdown = ttk.Combobox(wait_frame_1_dt, values=pytz.all_timezones,
                 font=NORMAL_FONT, state="readonly", width=16)
+        self.to_readonly_disable.append(self.tz_dropdown)
+
         self.tz_dropdown.pack(fill=tk.X, padx=2, pady=2)
         self.tz_dropdown.option_add('*TCombobox*Listbox.font', NORMAL_FONT)
         self.tz_dropdown.set(DEFAULT_TZ)
@@ -573,28 +581,37 @@ class TelescopeSchedulerApp:
         # Get time now to fill in defaults
         dt_now = datetime.datetime.now(
                 tz=pytz.timezone(self.tz_dropdown.get()))
-        hh_now, mm_now = dt_now.hour, dt_now.minute
+        hh_now, mm_now, ss_now = dt_now.hour, dt_now.minute, dt_now.second
 
         self.date_entry = DateEntry(wait_frame_2, width=8, background='darkblue',
                         foreground='white', borderwidth=2, font=NORMAL_FONT)
         self.date_entry.pack(side=tk.LEFT, pady=2, padx=5)
+        self.to_enable_disable.append(self.date_entry)
 
         self.hours_spin = tk.Spinbox(wait_frame_2, from_=2, to=23, width=3, increment=1,
             format="%02.0f", font=NORMAL_FONT, textvariable=tk.IntVar(value=hh_now))
         self.minutes_spin = tk.Spinbox(wait_frame_2, from_=0, to=59, width=3, increment=1,
             format="%02.0f", font=NORMAL_FONT, textvariable=tk.IntVar(value=mm_now))
+        self.seconds_spin = tk.Spinbox(wait_frame_2, from_=0, to=59, width=3, increment=1,
+            format="%02.0f", font=NORMAL_FONT, textvariable=tk.IntVar(value=ss_now))
         self.hours_spin.pack(side=tk.LEFT, padx=5)
         self.minutes_spin.pack(side=tk.LEFT)
+        self.seconds_spin.pack(side=tk.LEFT)
+        self.to_enable_disable.append(self.hours_spin)
+        self.to_enable_disable.append(self.minutes_spin)
+        self.to_enable_disable.append(self.seconds_spin)
 
         self.reset_time_button = tk.Button(wait_frame_2, font=FILL_FONT, text="now",
                 command=self.reset_time)
         self.reset_time_button.pack(side=tk.RIGHT, pady=2, padx=5)
         self.reset_time()
+        self.to_enable_disable.append(self.reset_time_button)
 
         self.wait_until_button = tk.Button(wait_frame_3, text="Wait for prompt", 
                 font=NORMAL_FONT, command=self.wait_for_prompt,
                 bg="lightblue", width=12)
         self.wait_until_button.pack(side=tk.LEFT, padx=5)
+        self.to_enable_disable.append(self.wait_until_button)
 
         self.wait_for_button = tk.Button(wait_frame_4, text="Wait for:", 
                 font=NORMAL_FONT, command=self.wait_for_seconds,
@@ -602,6 +619,8 @@ class TelescopeSchedulerApp:
         self.wait_for_button.pack(side=tk.LEFT, padx=5)
         self.wait_for_entry = tk.Entry(wait_frame_4, font=NORMAL_FONT, width=5)
         self.wait_for_entry.pack(side=tk.LEFT, padx=5)
+        self.to_enable_disable.append(self.wait_for_entry)
+        self.to_enable_disable.append(self.wait_for_button)
 
         # Button frame - Two buttons
         check_button = tk.Button(self.button_frame, text="Check Schedule", width=15,
@@ -760,7 +779,7 @@ class TelescopeSchedulerApp:
         # Check if all selections have values
         if project_id and backend and postprocessor:
             # Format the entry to be added to the listbox
-            entry = f"-- BACKEND -- ProjectID: {project_id}, Backend: {backend}, Postprocessor: {postprocessor}"
+            entry = f"--   BACKEND   -- ProjectID: {project_id}, Backend: {backend}, Postprocessor: {postprocessor}"
             self.listbox.insert(tk.END, entry)
         else:
             print("Please select all fields.")
@@ -769,7 +788,7 @@ class TelescopeSchedulerApp:
         digitizer_mode = self.digitizer_mode_dropdown.get()
 
         if digitizer_mode:
-            entry = f"-- DIGITIZER -- Mode: {digitizer_mode}"
+            entry = f"--   DIGITIZER   -- Mode: {digitizer_mode}"
             self.listbox.insert(tk.END, entry)
         else:
             print("Please select digitizer mode")
@@ -795,7 +814,7 @@ class TelescopeSchedulerApp:
         eq_level = self.eq_level_var.get()
 
         # Format the entry for the frequency setup
-        entry = f"-- SET FREQ -- Tuning A: {tuning_a}, Tuning B: {tuning_b}, RF gain: {rf_gain}, IF gain: {if_gain}, EQ level: {eq_level}"
+        entry = f"--    SETFREQ    -- TuningA: {tuning_a}, TuningB: {tuning_b}, RFgain: {rf_gain}, IFgain: {if_gain}, EQlevel: {eq_level}"
         self.listbox.insert(tk.END, entry)
 
     def add_source_entry(self):
@@ -806,7 +825,7 @@ class TelescopeSchedulerApp:
         # Check if both fields are filled
         if source_name and obs_time:
             # Format the entry and insert it into the listbox
-            entry = f"--    TRACK   -- Source: {source_name}, Observation Time: {obs_time}"
+            entry = f"--      TRACK     -- Source: {source_name}, ObsTime: {obs_time}"
             self.listbox.insert(tk.END, entry)
 
             # Clear the input fields after adding
@@ -818,13 +837,15 @@ class TelescopeSchedulerApp:
     def reset_time(self):
         dt_now = datetime.datetime.now(
                 tz=pytz.timezone(self.tz_dropdown.get()))
-        hh_now, mm_now = dt_now.hour, dt_now.minute
+        hh_now, mm_now, ss_now = dt_now.hour, dt_now.minute, dt_now.second
 
         self.date_entry.set_date(dt_now)
         self.hours_spin.delete(0, tk.END)
         self.minutes_spin.delete(0, tk.END)
+        self.seconds_spin.delete(0, tk.END)
         self.hours_spin.insert(0, f'{hh_now:02}')
         self.minutes_spin.insert(0, f'{mm_now:02}')
+        self.seconds_spin.insert(0, f'{ss_now:02}')
 
     def add_park_command(self):
         entry = f"--      PARK    -- Az,el = (0, 180) "
@@ -1151,15 +1172,61 @@ class TelescopeSchedulerApp:
                 return
             self.write_status(text=cmd)
             self.change_color_of_selected_entry(idx)
-            time.sleep(5)
+
+            cmd_type, config = self.parse_command(cmd)
+            print(cmd_type, config)
+            sch = ScheduleExecutor(cmd_type, config, self.write_status)
+            task_thread = threading.Thread(target=sch.execute)
+            task_thread.start()
+            while task_thread.is_alive():
+                time.sleep(0.5)
+                self.root.update()
+
+            #time.sleep(5)
+
             self.root.update()
         self.change_color_of_selected_entry(idx+1)
         idx = 0
         self.enable_everything()
+        self.write_status("Finished Schedule!")
     
     def abort_schedule(self):
         print("interrupt requested")
         self.interrupt_flag = True
+
+    def parse_command(self, command):
+        res = parse("-- {cmd_type} -- {cfg_str}", command)
+        cmd_type, cfg_str = res['cmd_type'], res['cfg_str']
+
+        cmd_type = cmd_type.strip().replace(" ", "_")
+        cfg = self.str_to_dict(res['cfg_str'])
+        
+        # supplement the configuration
+        ant_list   = self.antenna_dropdown.get_selected_options()
+        hp_targets = list_to_hashpipe_targets(self.targets_dropdown.get_selected_options())
+
+        if cmd_type == "SETFREQ":
+            cfg['ant_list'] = ant_list
+        if cmd_type == "BACKEND":
+            cfg['hp_targets'] = hp_targets
+        if cmd_type == "TRACK":
+            cfg['ant_list'] = ant_list
+            cfg['hp_targets'] = hp_targets
+
+        return cmd_type, cfg
+
+
+    def str_to_dict(self, cfg_str):
+        splt = cfg_str.split(",")
+        
+        cfg = {}
+        for keyval in splt:
+            key, val = keyval.split(":")
+            key = key.strip().replace(" ", "_")
+
+            cfg[key] = val.strip()
+
+        return cfg
 
     def change_color_of_selected_entry(self, selected_index):
         # Get all current entries
@@ -1185,8 +1252,9 @@ class TelescopeSchedulerApp:
 
     def disable_everything(self):
         self.root.update()
-        for button in self.to_enable_disable:
+        for button in self.to_enable_disable + self.to_readonly_disable:
             button.config(state=tk.DISABLED)
+
         self.root.update()
         #self.tuning_a.config(state=tk.DISABLED)
         #self.tuning_b.config(state=tk.DISABLED)
@@ -1195,6 +1263,9 @@ class TelescopeSchedulerApp:
         self.root.update()
         for button in self.to_enable_disable:
             button.config(state=tk.NORMAL)
+        for button in self.to_readonly_disable:
+            button.config(state="readonly")
+
         self.root.update()
         #self.tuning_a.config(state=tk.NORMAL)
         #self.tuning_b.config(state=tk.NORMAL)
@@ -1255,20 +1326,38 @@ class TelescopeSchedulerApp:
 
 
     def wait_until(self, event=None):
-        entry = f"--    WAIT   -- Until "
+        date_selected = self.date_entry.get()
+        hours = int(self.hours_spin.get())
+        minutes = int(self.minutes_spin.get())
+        seconds = int(self.seconds_spin.get())
+
+        start_time = datetime.datetime.strptime(
+                f"{date_selected} {hours:02}:{minutes:02}:{seconds:02}", 
+                "%m/%d/%y %H:%M:%S")
+        selected_tz = pytz.timezone(self.tz_dropdown.get())
+
+        localized_time = selected_tz.localize(start_time)
+
+        entry = f"--  WAITUNTIL  -- {localized_time}"
         self.listbox.insert(tk.END, entry)
+
+        # to parse back
+        # Parse the string including the timezone
+        # dt_with_tz = datetime.fromisoformat(datetime_string)
+
 
 
     def wait_for_prompt(self, event=None):
-        entry = f"--    WAIT   -- For prompt "
+        entry = f"-- WAITPROMPT -- User input"
         self.listbox.insert(tk.END, entry)
         pass
 
 
     def wait_for_seconds(self, event=None):
-        entry = f"--    WAIT   -- For X seconds "
-        self.listbox.insert(tk.END, entry)
-        pass
+        wait_time = self.wait_for_entry.get()
+        if wait_time:
+            entry = f"--   WAITFOR   -- {wait_time} seconds "
+            self.listbox.insert(tk.END, entry)
 
 
     def start_progress_bar_indefinite(self):
