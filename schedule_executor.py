@@ -5,6 +5,7 @@ import time
 import json
 import redis
 import datetime
+import tkinter as tk
 
 from ATATools import ata_control, logger_defaults, ata_if
 
@@ -14,35 +15,12 @@ from SNAPobs.snap_hpguppi import snap_hpguppi_defaults as hpguppi_defaults
 from SNAPobs.snap_hpguppi import record_in as hpguppi_record_in
 from SNAPobs.snap_hpguppi import auxillary as hpguppi_auxillary
 
+WAIT_DTFMT = "%Y-%m-%dT%Hh%Mm%Ss%z"
 
 PROJECTID_FNAME = "./projects.json"
 BACKENDS_FNAME = "./backends.json"
 POSTPROCESSORS_FNAME = "./postprocessors.json"
 
-def wait_until(target_time: datetime.datetime):
-    """
-    Pauses execution until the specified target time.
-
-    Parameters:
-    - target_time (datetime.datetime): The datetime to wait until.
-
-    Raises:
-    - ValueError: If target_time is in the past.
-    """
-    now = datetime.datetime.now()
-
-    if target_time <= now:
-        print("CAREFUL TIME WAS BEFORE NOW")
-        return
-        #raise ValueError("Target time is in the past. Please provide a future time.")
-
-    # Calculate the remaining time in seconds
-    remaining_time = (target_time - now).total_seconds()
-    print(f"Waiting for {remaining_time} seconds until {target_time}...")
-
-    # Sleep for the remaining time
-    time.sleep(remaining_time)
-    print("Reached target time:", target_time)
 
 
 def most_common(lst):
@@ -95,8 +73,7 @@ class SetFreqTunning(Executable):
         super().__init__(*args, **kwargs)
 
         needed_keys = ["ant_list", "RFgain", "IFgain",
-                       "EQlevel", "TuningA", "TuningB",
-                       "TuningC", "TuningD"]
+                       "EQlevel"]
         self.check_consistency(needed_keys)
 
     def execute(self):
@@ -104,7 +81,7 @@ class SetFreqTunning(Executable):
         los   = []
         freqs = []
         for t in ["a", "b", "c", "d"]: 
-            t_config = 'Tuning_'+t.upper()
+            t_config = 'Tuning'+t.upper()
             if t_config in self.config:
                 los.append(t)
                 freqs.append(float(self.config[t_config]))
@@ -134,6 +111,81 @@ class SetFreqTunning(Executable):
             pass
 
 
+class WaitFor(Executable):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        needed_keys = ["twait"]
+        self.check_consistency(needed_keys)
+    def execute(self):
+        t = float(self.config["twait"])
+        self.write_status(f"Waiting for {t} seconds")
+        time.sleep(t)
+
+
+class WaitUntil(Executable):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        needed_keys = ["dt"]
+        self.check_consistency(needed_keys)
+
+    def execute(self):
+        dt_str = self.config["dt"]
+        dt = datetime.datetime.strptime(dt_str, WAIT_DTFMT)
+        self.write_status(f"Waiting until: {dt_str}")
+        self.wait_until(dt)
+        self.write_status(f"Done waiting")
+
+    def wait_until(self, target_time: datetime.datetime):
+        """
+        Pauses execution until the specified target time.
+
+        Parameters:
+        - target_time (datetime.datetime): The datetime to wait until.
+
+        Raises:
+        - ValueError: If target_time is in the past.
+        """
+        now = datetime.datetime.now().astimezone()
+
+        if target_time <= now:
+            self.write_status(f"Target time {target_time} is in the past. Please provide a future time...",
+                    "red")
+            return
+
+        # Calculate the remaining time in seconds
+        remaining_time = (target_time - now).total_seconds()
+        self.write_status(f"Waiting for {remaining_time} seconds until {target_time}...")
+
+        # Sleep for the remaining time
+        time.sleep(remaining_time)
+        self.write_status("Reached target time!")
+
+class WaitPrompt(Executable):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def execute(self):
+        root = tk.Tk()
+        root.geometry("350x150")  # Set the size of the window
+        root.title("Wait prompt")
+
+        self.write_status("User prompt: press 'continue' to proceed with observing script")
+        label = tk.Label(root, text="Press to continue observation", font=("Arial", 18))
+        def on_click():
+            root.destroy()
+
+        label.pack(pady=20)  # Add some padding around the label
+        continue_button = tk.Button(root, text="Continue", 
+            command = on_click, font=("Arial", 14))
+        continue_button.pack(pady=10)
+
+        root.mainloop()
+        self.write_status("User prompt: continuing observing script")
+
+
+
+
+
 class SetBackend(Executable):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -150,6 +202,7 @@ class SetBackend(Executable):
         postproc_script = postprocessors_mapping[self.config['Postprocessor']]
 
         # Set backend
+        self.write_status(f"executing: ansible-playbook {backend_config}")
         os.system(f"ansible-playbook {backend_config}")
 
         if self.config['Backend'].upper().startswith("XGPU"):
@@ -164,13 +217,9 @@ class SetBackend(Executable):
 
 
         # Set postprocessor
+        self.write_status(f"executing: {postproc_script}")
         os.system(postproc_script)
 
-
-class Wait(Executable):
-    def __init__(self, *args, **kwards):
-        super().__init__(*args, **kwargs)
-        self.check_consistence(needed_keys)
 
         
 class TrackAndObserve(Executable):
@@ -271,8 +320,12 @@ class ScheduleExecutor:
             return SetBackend(config, write_status)
         elif action_type == "TRACK":
             return TrackAndObserve(config, write_status)
-        elif action_type == "WAIT":
-            return None
+        elif action_type == "WAITPROMPT":
+            return WaitPrompt(config, write_status)
+        elif action_type == "WAITUNTIL":
+            return WaitUntil(config, write_status)
+        elif action_type == "WAITFOR":
+            return WaitFor(config, write_status)
 
     def execute(self):
         self.executor.execute()

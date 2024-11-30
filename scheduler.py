@@ -1,6 +1,8 @@
 import tkinter as tk
 from tkinter import ttk
 from tkinter import filedialog, messagebox
+from tkinter.scrolledtext import ScrolledText
+
 from tkcalendar import DateEntry
 from PIL import Image, ImageTk
 import json
@@ -33,6 +35,9 @@ ENABLE_SLACK = False
 TITLE_FONT = ("Helvetica", 18)
 NORMAL_FONT = ("Helvetica", 14)
 FILL_FONT = ("Helvetica", 12)
+
+LOGGING_DTFMT = "%Y-%m-%d %H:%M:%S.%f"
+WAIT_DTFMT = "%Y-%m-%dT%Hh%Mm%Ss%z"
 
 
 def hashpipe_targets_to_list(hp_targets):
@@ -182,6 +187,36 @@ class DropdownWithCheckboxes(tk.Frame):
         return [option for option, var in self.vars.items() if var.get()]
 
 
+class LogWindow(tk.Toplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Log Window")
+        self.geometry("1000x900")
+
+        # Add a scrolled text widget to display logs
+        self.log_text = ScrolledText(self, state="disabled", wrap="word", font=NORMAL_FONT)
+        self.log_text.pack(expand=True, fill="both", padx=10, pady=10)
+
+    def add_log(self, message, color="green"):
+        """
+        Add a log message with a specified color.
+
+        Args:
+            message (str): The log message to add.
+            color (str): The color of the log message (e.g., "red", "blue", "#RRGGBB").
+        """
+        # Create a unique tag for the color
+        tag_name = f"tag_{color}"
+        if not tag_name in self.log_text.tag_names():
+            self.log_text.tag_configure(tag_name, foreground=color)
+
+        # Insert the log message with the color tag
+        self.log_text.configure(state="normal")
+        self.log_text.insert("end", message + "\n", tag_name)
+        self.log_text.configure(state="disabled")
+        self.log_text.see("end")  # Automatically scroll to the end
+
+
 class TelescopeSchedulerApp:
     def __init__(self, root):
         self.root = root
@@ -281,7 +316,8 @@ class TelescopeSchedulerApp:
         self.to_enable_disable.append(delete_button)
 
         # Error display label
-        self.obs_status = tk.Label(self.frame_left, text="", font=('Helvetica', 16))
+        self.obs_status = tk.Label(self.frame_left, text="", font=('Helvetica', 16),
+                width = 75)
         self.obs_status.grid(row=4, column=1, padx=10, pady=10)
         #self.obs_status.config(text="Bla, bla")
 
@@ -326,6 +362,11 @@ class TelescopeSchedulerApp:
         file_menu.add_separator()
         file_menu.add_command(label="Quit", command=self.check_if_modified_and_quit, font=NORMAL_FONT)
 
+        # Add Help menu to the menubar
+        log_menu = tk.Menu(self.menu_bar, tearoff=0)
+        self.menu_bar.add_cascade(label="Log", menu=log_menu, font=NORMAL_FONT)
+        log_menu.add_command(label="Show log", command=self.open_log_window, font=NORMAL_FONT)
+
 
         # Add Help menu to the menubar
         help_menu = tk.Menu(self.menu_bar, tearoff=0)
@@ -336,6 +377,8 @@ class TelescopeSchedulerApp:
 
         # check if schedule is modified before exiting
         self.root.protocol("WM_DELETE_WINDOW", self.check_if_modified_and_quit)
+        # Add log
+        self.log_window = LogWindow(self.root)
         
 
     def setup_right_frame(self):
@@ -619,6 +662,8 @@ class TelescopeSchedulerApp:
         self.wait_for_button.pack(side=tk.LEFT, padx=5)
         self.wait_for_entry = tk.Entry(wait_frame_4, font=NORMAL_FONT, width=5)
         self.wait_for_entry.pack(side=tk.LEFT, padx=5)
+        sec_lab = tk.Label(wait_frame_4, text="sec", font=NORMAL_FONT)
+        sec_lab.pack(side=tk.LEFT, padx=3)
         self.to_enable_disable.append(self.wait_for_entry)
         self.to_enable_disable.append(self.wait_for_button)
 
@@ -727,11 +772,13 @@ class TelescopeSchedulerApp:
             self.observer.config(state=tk.DISABLED)
             self.register_oic_button.config(state=tk.DISABLED)
             self.registered_observer = self.observer.get()
+            oic = self.registered_observer
+
+            self.write_status(f'Observer {oic} registered as Observer in Charge')
 
             # Get slack token and channel_id
             slack_token = os.environ.get("ATATOKEN", "")
             channel_id = os.environ.get("ATACHANNEL", "")
-            oic = self.registered_observer
             emoji = ":large_green_circle:"
             message_text = f'{emoji} Observer *`{oic}`* registered as Observer In Charge {emoji}'
 
@@ -779,7 +826,9 @@ class TelescopeSchedulerApp:
         # Check if all selections have values
         if project_id and backend and postprocessor:
             # Format the entry to be added to the listbox
-            entry = f"--   BACKEND   -- ProjectID: {project_id}, Backend: {backend}, Postprocessor: {postprocessor}"
+            cmd_type = "BACKEND"
+            entry = cmd_type + (12 - len(cmd_type))*" "
+            entry += f"-- ProjectID: {project_id}, Backend: {backend}, Postprocessor: {postprocessor}"
             self.listbox.insert(tk.END, entry)
         else:
             print("Please select all fields.")
@@ -788,7 +837,9 @@ class TelescopeSchedulerApp:
         digitizer_mode = self.digitizer_mode_dropdown.get()
 
         if digitizer_mode:
-            entry = f"--   DIGITIZER   -- Mode: {digitizer_mode}"
+            cmd_type = "DIGITIZER"
+            entry = cmd_type + (12 - len(cmd_type))*" "
+            entry += f"-- Mode: {digitizer_mode}"
             self.listbox.insert(tk.END, entry)
         else:
             print("Please select digitizer mode")
@@ -814,7 +865,9 @@ class TelescopeSchedulerApp:
         eq_level = self.eq_level_var.get()
 
         # Format the entry for the frequency setup
-        entry = f"--    SETFREQ    -- TuningA: {tuning_a}, TuningB: {tuning_b}, RFgain: {rf_gain}, IFgain: {if_gain}, EQlevel: {eq_level}"
+        cmd_type = "SETFREQ"
+        entry = cmd_type + (12 - len(cmd_type)) * " "
+        entry += f"-- TuningA: {tuning_a}, TuningB: {tuning_b}, RFgain: {rf_gain}, IFgain: {if_gain}, EQlevel: {eq_level}"
         self.listbox.insert(tk.END, entry)
 
     def add_source_entry(self):
@@ -825,7 +878,9 @@ class TelescopeSchedulerApp:
         # Check if both fields are filled
         if source_name and obs_time:
             # Format the entry and insert it into the listbox
-            entry = f"--      TRACK     -- Source: {source_name}, ObsTime: {obs_time}"
+            cmd_type = "TRACK"
+            entry = cmd_type + (12 - len(cmd_type)) * " "
+            entry += f"-- Source: {source_name}, ObsTime: {obs_time}"
             self.listbox.insert(tk.END, entry)
 
             # Clear the input fields after adding
@@ -848,7 +903,9 @@ class TelescopeSchedulerApp:
         self.seconds_spin.insert(0, f'{ss_now:02}')
 
     def add_park_command(self):
-        entry = f"--      PARK    -- Az,el = (0, 180) "
+        cmd_type = "SETAZEL"
+        entry = cmd_type + (12 - len(cmd_type)) * " "
+        entry += f"-- Az: 0, El: 180 "
         self.listbox.insert(tk.END, entry)
 
     def duplicate_entry(self):
@@ -953,6 +1010,20 @@ class TelescopeSchedulerApp:
         for index in new_selection:
             self.listbox.selection_set(index)  # Set the new selection
 
+    def open_log_window(self):
+        # Check if the log window is already open
+        if self.log_window is None or not self.log_window.winfo_exists():
+            self.log_window = LogWindow(self.root)
+        else:
+            self.log_window.focus()
+
+    def log_message(self, message, color):
+        # Log a message to the log window if it's open
+        if self.log_window and self.log_window.winfo_exists():
+            self.log_window.add_log(message, color)
+        else:
+            print("Log window is not open.")
+
     def show_help(self):
         """Display a larger Help dialog with scrollable content."""
         help_window = tk.Toplevel(self.root)
@@ -987,6 +1058,7 @@ class TelescopeSchedulerApp:
                 # user didn't want to save, disregarding
                 pass
 
+        self.write_status("New schedule")
         self.deregister_oic()
         self.observer.delete(0, tk.END)
 
@@ -1070,7 +1142,16 @@ class TelescopeSchedulerApp:
                 data = json.load(json_file)
 
             self.listbox.delete(0, tk.END)
-            for entry in data['commands']:
+            #for entry in data['commands']:
+            #    self.listbox.insert(tk.END, entry)
+            for cmd in data['commands']:
+                cmd_type = list(cmd.keys())[0]
+                cmd_dict = cmd[cmd_type]
+                #cmd_type, cmd_dict
+                entry = str(cmd_type) + (12 - len(cmd_type))*" " + "--"
+                for elem,val in cmd_dict.items():
+                    entry += f" {elem}: {val},"
+                entry = entry[:-1] #remove last ,
                 self.listbox.insert(tk.END, entry)
 
         except Exception as e:
@@ -1093,10 +1174,21 @@ class TelescopeSchedulerApp:
             if not filename:
                 return # User cancelled the file selection
 
-            commands = self.listbox.get(0, tk.END)
+            self.write_status(f"Trying to save to file: {filename}")
+            commands_str = self.listbox.get(0, tk.END)
             data = {
-                    "commands": list(commands)
+                    "commands": []
                     }
+
+            cmd_list = []
+            for cmd in commands_str:
+                cmd_type, config = self.parse_command(cmd, supplement=False)
+                print(cmd_type, config)
+                cmd_list.append({cmd_type: config})
+
+            print(cmd_list)
+            data["commands"] = cmd_list
+
             with open(filename, "w") as json_file:
                 json.dump(data, json_file, indent=4)
         except Exception as e:
@@ -1131,7 +1223,7 @@ class TelescopeSchedulerApp:
         sources = []
 
         for command in self.listbox.get(0, tk.END):
-            res = parse('--{cmd_type}--{cmd}', command)
+            res = parse('{cmd_type}--{cmd}', command)
             cmd_type = res['cmd_type'].strip()
             cmd = res['cmd'].strip()
 
@@ -1155,9 +1247,19 @@ class TelescopeSchedulerApp:
 
     def write_status(self, text, fg='green'):
         self.obs_status.config(text=text, fg=fg, font=NORMAL_FONT)
+        if text:
+            d = datetime.datetime.now()
+            log_text = "[" + d.strftime(LOGGING_DTFMT)[:-3] + "]"
+            log_text += f": {text}"
+            self.log_message(log_text, color=fg)
     
     def execute_schedule(self):
         self.write_status("")
+        self.write_status("-")
+        self.write_status("="*79)
+        self.write_status("Starting new schedule")
+        self.write_status("="*79)
+        self.write_status("-")
 
         if self.registered_observer == "":
             self.write_status("Please register as OIC first", fg='red')
@@ -1174,7 +1276,6 @@ class TelescopeSchedulerApp:
             self.change_color_of_selected_entry(idx)
 
             cmd_type, config = self.parse_command(cmd)
-            print(cmd_type, config)
             sch = ScheduleExecutor(cmd_type, config, self.write_status)
             task_thread = threading.Thread(target=sch.execute)
             task_thread.start()
@@ -1194,8 +1295,8 @@ class TelescopeSchedulerApp:
         print("interrupt requested")
         self.interrupt_flag = True
 
-    def parse_command(self, command):
-        res = parse("-- {cmd_type} -- {cfg_str}", command)
+    def parse_command(self, command, supplement=True):
+        res = parse("{cmd_type} -- {cfg_str}", command)
         cmd_type, cfg_str = res['cmd_type'], res['cfg_str']
 
         cmd_type = cmd_type.strip().replace(" ", "_")
@@ -1205,13 +1306,14 @@ class TelescopeSchedulerApp:
         ant_list   = self.antenna_dropdown.get_selected_options()
         hp_targets = list_to_hashpipe_targets(self.targets_dropdown.get_selected_options())
 
-        if cmd_type == "SETFREQ":
-            cfg['ant_list'] = ant_list
-        if cmd_type == "BACKEND":
-            cfg['hp_targets'] = hp_targets
-        if cmd_type == "TRACK":
-            cfg['ant_list'] = ant_list
-            cfg['hp_targets'] = hp_targets
+        if supplement:
+            if cmd_type == "SETFREQ":
+                cfg['ant_list'] = ant_list
+            if cmd_type == "BACKEND":
+                cfg['hp_targets'] = hp_targets
+            if cmd_type == "TRACK":
+                cfg['ant_list'] = ant_list
+                cfg['hp_targets'] = hp_targets
 
         return cmd_type, cfg
 
@@ -1337,8 +1439,11 @@ class TelescopeSchedulerApp:
         selected_tz = pytz.timezone(self.tz_dropdown.get())
 
         localized_time = selected_tz.localize(start_time)
+        localized_time_str = localized_time.strftime(WAIT_DTFMT)
 
-        entry = f"--  WAITUNTIL  -- {localized_time}"
+        #entry = f"--  WAITUNTIL  -- {localized_time}"
+        cmd_type = "WAITUNTIL"
+        entry = cmd_type + (12 - len(cmd_type))*" " + f"-- dt: {localized_time_str}"
         self.listbox.insert(tk.END, entry)
 
         # to parse back
@@ -1348,7 +1453,8 @@ class TelescopeSchedulerApp:
 
 
     def wait_for_prompt(self, event=None):
-        entry = f"-- WAITPROMPT -- User input"
+        cmd_type = "WAITPROMPT"
+        entry = cmd_type + (12 - len(cmd_type))*" " + f"-- Method: prompt"
         self.listbox.insert(tk.END, entry)
         pass
 
@@ -1356,7 +1462,9 @@ class TelescopeSchedulerApp:
     def wait_for_seconds(self, event=None):
         wait_time = self.wait_for_entry.get()
         if wait_time:
-            entry = f"--   WAITFOR   -- {wait_time} seconds "
+            cmd_type = "WAITFOR"
+            entry = cmd_type + (12 - len(cmd_type))*" " 
+            entry += f"-- twait: {wait_time}"
             self.listbox.insert(tk.END, entry)
 
 
