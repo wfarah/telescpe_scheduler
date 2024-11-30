@@ -1,7 +1,9 @@
 {
     "xGPU_0.1s": "/home/sonata/src/ansible_playbooks/hashpipe/xgpu_record.yml",
+    "xGPU_1s": "/home/sonata/src/ansible_playbooks/hashpipe/xgpu_record.yml",
     "xGPU_5s": "/home/sonata/src/ansible_playbooks/hashpipe/xgpu_record.yml",
     "xGPU_10s": "/home/sonata/src/ansible_playbooks/hashpipe/xgpu_record.yml",
     "xGPU_30s": "/home/sonata/src/ansible_playbooks/hashpipe/xgpu_record.yml",
-    "BLADE_A_64us_noincoh": "/home/sonata/src/ansible_playbooks/hashpipe/beamformer_mode_a_record.yml"
+    "BLADE_A_64us_noincoh": "/home/sonata/src/ansible_playbooks/hashpipe/beamformer_mode_a_record.yml",
+    "BLADE_H_2b_32c_32a": "/home/sonata/src/ansible_playbooks/hashpipe/beamformer_mode_h_record_auto.yml"
 }
