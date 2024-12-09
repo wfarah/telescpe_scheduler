@@ -10,6 +10,11 @@
                 "Postprocessor": [
                     "cp_uvh5"
                 ]
+            },
+            "xGPU_30s_dev": {
+                "Postprocessor": [
+                    "cp_uvh5"
+                ]
             }
         }
     },
