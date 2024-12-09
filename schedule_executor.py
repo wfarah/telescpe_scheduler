@@ -16,6 +16,7 @@ from SNAPobs.snap_hpguppi import record_in as hpguppi_record_in
 from SNAPobs.snap_hpguppi import auxillary as hpguppi_auxillary
 
 WAIT_DTFMT = "%Y-%m-%dT%Hh%Mm%Ss%z"
+DAQPULSE_DTFMT = "%a %b %d %H:%M:%S %Y"
 
 PROJECTID_FNAME = "./projects.json"
 BACKENDS_FNAME = "./backends.json"
@@ -32,6 +33,55 @@ def load_mapping(fname):
         mapping = json.load(json_file)
     return mapping
 
+def get_daqpulse(hp_targets):
+    redis_obj = redis.Redis(host='redishost', decode_responses=True)
+    daqpulses1 = []
+    daqpulses2 = []
+
+    for node,instances in hp_targets.items():
+        for instance in instances:
+            kv = HashpipeKeyValues(node, instance, redis_obj)
+            dt_str = kv.get("DAQPULSE")
+            if not dt_str:
+                raise RuntimeError(f"Could not get a DAQPULSE from {node}.{instance}")
+
+            try:
+                dt = datetime.datetime.strptime(dt_str, DAQPULSE_DTFMT)
+            except Exception as e:
+                original_exception = e.args[0]
+                raise RuntimeError(f"Could not convert to datetime from {node}.{instance}\nOriginal exception: {original_exception}")
+
+            daqpulses1.append(dt)
+
+    #sleep to get one second in
+    time.sleep(1.5)
+
+    for node,instances in hp_targets.items():
+        for instance in instances:
+            kv = HashpipeKeyValues(node, instance, redis_obj)
+            dt_str = kv.get("DAQPULSE")
+            if not dt_str:
+                raise RuntimeError(f"Could not get a DAQPULSE from {node}.{instance}")
+
+            try:
+                dt = datetime.datetime.strptime(dt_str, DAQPULSE_DTFMT)
+            except Exception as e:
+                original_exception = e.args[0]
+                raise RuntimeError(f"Could not convert to datetime from {node}.{instance}\nOriginal exception: {original_exception}")
+
+            daqpulses2.append(dt)
+
+    i = 0
+    for node,instances in hp_targets.items():
+        for instance in instances:
+            daqpulse1 = daqpulses1[i]
+            daqpulse2 = daqpulses2[i]
+            diff = (daqpulse2 - daqpulse1).seconds
+            if diff < 1:
+                raise RuntimeError(f"No heartbeat from {node}.{instance}")
+            i += 1
+
+
 
 def get_current_backend(hp_targets):
     redis_obj = redis.Redis(host='redishost', decode_responses=True)
@@ -42,15 +92,23 @@ def get_current_backend(hp_targets):
             kvs.append(HashpipeKeyValues(node, instance, redis_obj))
 
     backend = list(set(kv.get("HPCONFIG") for kv in kvs))
-    assert len(backend) == 1, "More than 1 backend detected for targets..."
+    assert len(backend) == 1, f"More than 1 backend detected for targets: {backend}"
 
     return backend[0]
 
 
 class Executable(ABC):
     def __init__(self, config, write_status):
+        # configuration dictionary for each executor
         self.config = config
+
+        # propagating status
         self.write_status = write_status
+
+        # in case schedule need to be aborted
+        # The executor can use this flag to interrupt if needed
+        self.interrupt = False
+
 
     @abstractmethod
     def execute(self):
@@ -61,11 +119,34 @@ class Executable(ABC):
             if key not in self.config.keys():
                 raise RuntimeError("Key: %s not in config keys" %key)
 
+    def interrupt_requested(self):
+        return self.interrupt
+
 
 class ReserveAntennas(Executable):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        needed_keys = ["ant_list"]
+        self.check_consistency(needed_keys)
+
     def execute(self):
         ant_list = self.config['ant_list']
+        self.write_status(f"Reserving antennas: {ant_list}")
         ata_control.reserve_antennas(ant_list)
+
+
+class ReleaseAntennas(Executable):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        needed_keys = ["ant_list"]
+        self.check_consistency(needed_keys)
+
+    def execute(self):
+        ant_list = self.config['ant_list']
+        self.write_status(f"Releasing antennas: {ant_list}")
+        ata_control.release_antennas(ant_list, False)
 
 
 class SetFreqTunning(Executable):
@@ -91,13 +172,15 @@ class SetFreqTunning(Executable):
             lo_max_freq = los[freqs.index(max_freq)]
 
             for lo, freq in zip(los, freqs):
-                if lo == max_freq:
+                if freq == max_freq:
+                    self.write_status(f"Setting frequency {freq} for LO {lo}, and setting focus frequency")
                     ata_control.set_freq(freq, self.config['ant_list'], 
                                          lo=lo)
+                    time.sleep(20)
                 else:
                     ata_control.set_freq(freq, self.config['ant_list'], 
                                          lo=lo, nofocus=True)
-            time.sleep(20)
+                    self.write_status(f"Setting frequency {freq} for LO {lo}")
 
         if bool(int(self.config['RFgain'])):
             self.write_status("Tunning RF:")
@@ -108,7 +191,7 @@ class SetFreqTunning(Executable):
             ata_if.tune_if(self.config['ant_list'], los=los)
 
         if bool(int(self.config['EQlevel'])):
-            pass
+            raise NotImplementedError("EQ level setting is not implemented yet")
 
 
 class WaitFor(Executable):
@@ -119,7 +202,14 @@ class WaitFor(Executable):
     def execute(self):
         t = float(self.config["twait"])
         self.write_status(f"Waiting for {t} seconds")
-        time.sleep(t)
+
+        t_unix_end = time.time() + t
+
+        while time.time() < t_unix_end:
+            if self.interrupt_requested():
+                self.write_status(f"observation stop requested", fg='red')
+                return
+            time.sleep(1)
 
 
 class WaitUntil(Executable):
@@ -193,6 +283,8 @@ class SetBackend(Executable):
                 "Postprocessor", "hp_targets"]
         self.check_consistency(needed_keys)
 
+        self.check_heartbeat = False
+
     def execute(self):
         projectid_mapping      = load_mapping(PROJECTID_FNAME)
         backends_mapping       = load_mapping(BACKENDS_FNAME)
@@ -206,7 +298,7 @@ class SetBackend(Executable):
         os.system(f"ansible-playbook {backend_config}")
 
         if self.config['Backend'].upper().startswith("XGPU"):
-            res = parse('xGPU_{xtimeint}s', self.config['Backend'])
+            res = parse('xGPU_{xtimeint}s{tmp}', self.config['Backend']+"tmp")
             xtimeint = float(res['xtimeint'])
             keyval_dict = {'XTIMEINT': xtimeint}
 
@@ -216,9 +308,29 @@ class SetBackend(Executable):
                             hp_targets, postproc=False)
 
 
+
         # Set postprocessor
         self.write_status(f"executing: {postproc_script}")
         os.system(postproc_script)
+
+        if self.check_heartbeat:
+            time.sleep(1)
+            self.write_status("Checking for DAQPULSE")
+            get_daqpulse(self.config['hp_targets'])
+            self.write_status("Done")
+
+
+class SetAzEl(Executable):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        needed_keys = ["ant_list", "Az", "El"]
+        self.check_consistency(needed_keys)
+
+    def execute(self):
+        ant_list = self.config['ant_list']
+        Az, El = float(self.config['Az']), float(self.config['El'])
+        self.write_status(f"Setting antennas to Az,El = ({Az}, {El})")
+        ata_control.set_az_el(ant_list, self.config['Az'], self.config['El'])
 
 
         
@@ -304,7 +416,15 @@ class TrackAndObserve(Executable):
             hpguppi_record_in.record_in(obs_start_in, obstime,
                     hashpipe_targets = hp_targets)
             self.write_status(f"Recording for {obstime}")
-            time.sleep(obstime + obs_start_in + 5)
+
+            t_unix_end = time.time() + obstime + obs_start_in + 5
+            
+            while time.time() < t_unix_end:
+                if self.interrupt_requested():
+                    hpguppi_record_in.record_in(reset=True,
+                            hashpipe_targets = hp_targets)
+                    return
+                time.sleep(1)
 
 
 
@@ -326,6 +446,19 @@ class ScheduleExecutor:
             return WaitUntil(config, write_status)
         elif action_type == "WAITFOR":
             return WaitFor(config, write_status)
+        elif action_type == "SETAZEL":
+            return SetAzEl(config, write_status)
+        elif action_type == "RESERVEANTENNAS":
+            return ReserveAntennas(config, write_status)
+        elif action_type == "RELEASEANTENNAS":
+            return ReleaseAntennas(config, write_status)
+        else:
+            raise RuntimeError(f"No known executor for action: {action_type}")
 
+    # this can be ran in a thread
     def execute(self):
         self.executor.execute()
+
+    # Call to interrupt execution
+    def interrupt(self):
+        self.executor.interrupt = True

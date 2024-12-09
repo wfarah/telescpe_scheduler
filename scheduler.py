@@ -74,6 +74,19 @@ def send_slack_message(token, channel, text):
         raise e
 
 
+class ExceptionThread(threading.Thread):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.exception = None
+
+    def run(self):
+        try:
+            if self._target:
+                self._target(*self._args, **self._kwargs)
+        except Exception as e:
+            self.exception = e
+
+
 class DropdownWithCheckboxes(tk.Frame):
     def __init__(self, parent, options, text="Select options",
                  bg="lightgrey", width=80, height=150):
@@ -905,7 +918,7 @@ class TelescopeSchedulerApp:
     def add_park_command(self):
         cmd_type = "SETAZEL"
         entry = cmd_type + (12 - len(cmd_type)) * " "
-        entry += f"-- Az: 0, El: 180 "
+        entry += f"-- Az: 0, El: 18 "
         self.listbox.insert(tk.END, entry)
 
     def duplicate_entry(self):
@@ -1198,6 +1211,9 @@ class TelescopeSchedulerApp:
         self.root.title(f"Allen Telescope Array Scheduler - {fname}")
 
     def check_schedule(self):
+        self.write_status("'Check schedule' is temporarily unavailable..., please use the command 'ataobsplanner' instead for now",
+                fg='red')
+        return
         self.disable_everything()
         data = self.generate_planner()
         #filename = "./tmp_obs.json" #XXX replace with tmp file
@@ -1267,21 +1283,51 @@ class TelescopeSchedulerApp:
 
         self.interrupt_flag = False
         self.disable_everything()
+
+        # Reserve antennas first
+        ant_list   = self.antenna_dropdown.get_selected_options()
+        config = {'ant_list': ant_list}
+        cmd_type = "RESERVEANTENNAS"
+        reserve_antennas = ScheduleExecutor(cmd_type, config, self.write_status)
+        reserve_antennas.execute()
+
+        # make sure I can release antennas
+        cmd_type = "RELEASEANTENNAS"
+        release_antennas = ScheduleExecutor(cmd_type, config, self.write_status)
+
         idx = 0
         for idx, cmd in enumerate(self.listbox.get(0, tk.END)):
             if self.interrupt_flag:
                 self.enable_everything()
+                release_antennas.execute()
                 return
             self.write_status(text=cmd)
             self.change_color_of_selected_entry(idx)
 
             cmd_type, config = self.parse_command(cmd)
-            sch = ScheduleExecutor(cmd_type, config, self.write_status)
-            task_thread = threading.Thread(target=sch.execute)
+            try:
+                sch = ScheduleExecutor(cmd_type, config, self.write_status)
+            except Exception as e:
+                self.write_status(e.args[0], fg='red')
+                self.enable_everything()
+                release_antennas.execute()
+                raise e
+
+            task_thread = ExceptionThread(target=sch.execute)
             task_thread.start()
             while task_thread.is_alive():
+                if self.interrupt_flag:
+                    # try to gracefully interrupt the process 
+                    # by passing the interrupt flag
+                    sch.interrupt()
                 time.sleep(0.5)
                 self.root.update()
+
+            if task_thread.exception:
+                self.write_status(task_thread.exception.args[0], fg='red')
+                self.enable_everything()
+                release_antennas.execute()
+                raise task_thread.exception
 
             #time.sleep(5)
 
@@ -1289,10 +1335,11 @@ class TelescopeSchedulerApp:
         self.change_color_of_selected_entry(idx+1)
         idx = 0
         self.enable_everything()
+        release_antennas.execute()
         self.write_status("Finished Schedule!")
     
     def abort_schedule(self):
-        print("interrupt requested")
+        self.write_status("Interrupt requested!")
         self.interrupt_flag = True
 
     def parse_command(self, command, supplement=True):
@@ -1314,6 +1361,8 @@ class TelescopeSchedulerApp:
             if cmd_type == "TRACK":
                 cfg['ant_list'] = ant_list
                 cfg['hp_targets'] = hp_targets
+            if cmd_type == "SETAZEL":
+                cfg['ant_list'] = ant_list
 
         return cmd_type, cfg
 
