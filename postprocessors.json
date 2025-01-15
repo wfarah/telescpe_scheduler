@@ -3,5 +3,10 @@
     "cp_blade_p059": "/home/sonata/src/observing_campaign/backend_setup_scripts/set_keys_blade_mv_p059.py",
     "cp_uvh5_p002": "/tmp/tmp2.py",
     "cp_fil_p003": "/tmp/tmp3.py",
-    "cp_uvh5_p041": "/home/sonata/src/observing_campaign/backend_setup_scripts/set_keys_blade_mv_p041.py"
+    "cp_fil_p031": "/home/sonata/src/observing_campaign/backend_setup_scripts/set_keys_blade_mv_p031.py",
+    "cp_uvh5_p041": "/home/sonata/src/observing_campaign/backend_setup_scripts/set_keys_blade_mv_p041.py",
+    "cp_uvh5_p039": "/home/sonata/src/observing_campaign/backend_setup_scripts/set_keys_uvh5_mv_p039.py",
+    "cp_uvh5_p060": "/home/sonata/src/observing_campaign/backend_setup_scripts/set_keys_uvh5_mv_p060.py",
+    "cp_uvh5_p061": "/home/sonata/src/observing_campaign/backend_setup_scripts/set_keys_uvh5_mv_p061.py",
+    "cp_uvh5_p028": "/home/sonata/src/observing_campaign/backend_setup_scripts/set_keys_uvh5_mv_p028.py"
 }

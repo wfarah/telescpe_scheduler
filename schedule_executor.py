@@ -154,7 +154,7 @@ class SetFreqTunning(Executable):
         super().__init__(*args, **kwargs)
 
         needed_keys = ["ant_list", "RFgain", "IFgain",
-                       "EQlevel"]
+                       "EQlevel", "Focus"]
         self.check_consistency(needed_keys)
 
     def execute(self):
@@ -163,9 +163,13 @@ class SetFreqTunning(Executable):
         freqs = []
         for t in ["a", "b", "c", "d"]: 
             t_config = 'Tuning'+t.upper()
+            # Check if tunings are in the config
             if t_config in self.config:
-                los.append(t)
-                freqs.append(float(self.config[t_config]))
+                f = self.config[t_config]
+                # check if frequency is valid
+                if f != '' and f != '0':
+                    los.append(t)
+                    freqs.append(float(f))
         if los:
             self.write_status("Setting frequencies for LOs: %s" %los)
             max_freq = max(freqs)
@@ -173,25 +177,33 @@ class SetFreqTunning(Executable):
 
             for lo, freq in zip(los, freqs):
                 if freq == max_freq:
-                    self.write_status(f"Setting frequency {freq} for LO {lo}, and setting focus frequency")
+                    focus_bool = bool(int(self.config['Focus']))
+                    self.write_status(f"Setting frequency {freq} for LO {lo}, setting focus: {focus_bool}")
+                    # "notfocus" is a bit confusing, but I set nofocus to True
+                    # if I don't want to set focus
                     ata_control.set_freq(freq, self.config['ant_list'], 
-                                         lo=lo)
-                    time.sleep(20)
+                                         lo=lo, nofocus= not focus_bool)
+                    # no feedback from focus freq mechanism
+                    # so I just wait for 20 seconds to make sure it happens
+                    if focus_bool:
+                        time.sleep(20)
                 else:
                     ata_control.set_freq(freq, self.config['ant_list'], 
                                          lo=lo, nofocus=True)
                     self.write_status(f"Setting frequency {freq} for LO {lo}")
 
         if bool(int(self.config['RFgain'])):
-            self.write_status("Tunning RF:")
+            self.write_status("Tunning RF...")
             ata_control.autotune(self.config['ant_list'])
+            self.write_status("Done")
 
         if bool(int(self.config['IFgain'])):
-            self.write_status("Tuning IF:")
+            self.write_status("Tuning IF...")
             ata_if.tune_if(self.config['ant_list'], los=los)
+            self.write_status("Done")
 
         if bool(int(self.config['EQlevel'])):
-            raise NotImplementedError("EQ level setting is not implemented yet")
+            self.write_status("EQ level setting is not implemented yet", fg='red')
 
 
 class WaitFor(Executable):
@@ -247,7 +259,12 @@ class WaitUntil(Executable):
         self.write_status(f"Waiting for {remaining_time} seconds until {target_time}...")
 
         # Sleep for the remaining time
-        time.sleep(remaining_time)
+        t_unix_end = time.time() + remaining_time
+        while time.time() < t_unix_end:
+            if self.interrupt_requested():
+                self.write_status(f"observation stop requested", fg='red')
+                return
+            time.sleep(1)
         self.write_status("Reached target time!")
 
 class WaitPrompt(Executable):
@@ -432,6 +449,8 @@ class TrackAndObserve(Executable):
 class ScheduleExecutor:
     def __init__(self, action_type, config, write_status=print):
         self.executor = self._get_executor(action_type, config, write_status)
+        self.action_type = action_type
+        self.config = config
 
     def _get_executor(self, action_type, config, write_status):
         if action_type == "SETFREQ":

@@ -65,9 +65,18 @@
             }
         }
     },
+    "p039": {
+        "Backend": {
+            "xGPU_30s": {
+                "Postprocessor": [
+                    "cp_uvh5_p039"
+                ]
+            }
+        }
+    },
     "p041": {
         "Backend": {
-            "xGPU_1s": {
+            "xGPU_30s": {
                 "Postprocessor": [
                     "cp_uvh5_p041"
                 ]
@@ -79,6 +88,38 @@
             "BLADE_H_2b_32c_32a": {
                 "Postprocessor": [
                     "cp_blade_p059"
+                ]
+            },
+            "BLADE_A_64us_noincoh": {
+                "Postprocessor": [
+                    "cp_blade_p059"
+                ]
+            }
+        }
+    },
+    "p060": {
+        "Backend": {
+            "xGPU_30s": {
+                "Postprocessor": [
+                    "cp_uvh5_p060"
+                ]
+            }
+        }
+    },
+    "p061": {
+        "Backend": {
+            "xGPU_30s": {
+                "Postprocessor": [
+                    "cp_uvh5_p061"
+                ]
+            }
+        }
+    },
+    "p028": {
+        "Backend": {
+            "xGPU_30s": {
+                "Postprocessor": [
+                    "cp_uvh5_p028"
                 ]
             }
         }

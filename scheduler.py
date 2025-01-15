@@ -1,6 +1,7 @@
 import tkinter as tk
+#import mttkinter.mtTkinter as tk
 from tkinter import ttk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, font
 from tkinter.scrolledtext import ScrolledText
 
 from tkcalendar import DateEntry
@@ -9,9 +10,20 @@ import json
 import time
 import threading
 
+import argparse
+import logging
+
 from schedule_executor import ScheduleExecutor
+from ata_obs_plan import ObsPlan #from ATATools.ata_obs_plan import ObsPlan
+from ata_obs_plot_app import ObsPlotApp #from ATATools.ata_obs_plot_app import ObsPlotApp
+import ATATools.ata_sources as check
+
+from odsutils import ods_engine
+
+from astropy.time import Time, TimeDelta
 
 import datetime
+from datetime import timezone
 import pytz
 from parse import parse
 
@@ -30,15 +42,33 @@ PROJECTID_FNAME = "./projects.json"
 BACKENDS_FNAME = "./backends.json"
 POSTPROCESSORS_FNAME = "./postprocessors.json"
 
-ENABLE_SLACK = False
+WAIT_FOR_PROMPT_DEFAULT = 600 # assume 10 minutes
+
 
 TITLE_FONT = ("Helvetica", 18)
 NORMAL_FONT = ("Helvetica", 14)
+TEXTBOX_FONT = ("Monospace", 12, "bold")
 FILL_FONT = ("Helvetica", 12)
 
 LOGGING_DTFMT = "%Y-%m-%d %H:%M:%S.%f"
+LOGGING_INFO_COLOR = ["green"]
+LOGGING_WARNING_COLOR = ["orange", "dark orange"]
+LOGGING_ERROR_COLOR = ["red", "dark red"]
+
 WAIT_DTFMT = "%Y-%m-%dT%Hh%Mm%Ss%z"
 
+ODS_DEFAULTS = "/opt/mnt/share/ods_defaults.json"
+ODS_WRITE    = "/home/sonata/ods.json"
+ODS_WRITE    = "/opt/mnt/share/ods_upload/ods.json"
+
+def is_positive_number(s):
+    try:
+        ss = float(s)
+        if ss < 0:
+            return False
+        return True
+    except ValueError:
+        return False
 
 def hashpipe_targets_to_list(hp_targets):
     hp_list = []
@@ -72,6 +102,15 @@ def send_slack_message(token, channel, text):
     except SlackApiError as e:
         # Handle the exception if there was an error
         raise e
+
+class ObsPlotAppSecondary(tk.Toplevel):
+    def __init__(self, parent, obs):
+        super().__init__(parent)
+
+        self.geometry("1550x900")
+        self.app = ObsPlotApp(self)
+        self.app.load_from_obsplan(obs)
+
 
 
 class ExceptionThread(threading.Thread):
@@ -207,7 +246,8 @@ class LogWindow(tk.Toplevel):
         self.geometry("1000x900")
 
         # Add a scrolled text widget to display logs
-        self.log_text = ScrolledText(self, state="disabled", wrap="word", font=NORMAL_FONT)
+        self.log_text = ScrolledText(self, state="disabled", wrap="word", 
+                font=TEXTBOX_FONT)
         self.log_text.pack(expand=True, fill="both", padx=10, pady=10)
 
     def add_log(self, message, color="green"):
@@ -229,14 +269,71 @@ class LogWindow(tk.Toplevel):
         self.log_text.configure(state="disabled")
         self.log_text.see("end")  # Automatically scroll to the end
 
+class SourceWidget(tk.Toplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Source Checker")
+        self.geometry("950x300")
+        self.parent = parent
 
-class TelescopeSchedulerApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Allen Telescope Array Scheduler")
+        # Input field for source
+        ttk.Label(self, text="Enter Source:", font=NORMAL_FONT).pack(pady=10)
+        self.source_input = ttk.Entry(self, font=NORMAL_FONT)
+        self.source_input.pack(pady=5)
+
+        # Check Source Button
+        self.check_button = tk.Button(self, text="Check Source", 
+                command=self.check_source, font=NORMAL_FONT)
+        self.check_button.pack(pady=10)
+
+        # Display Area
+        self.output_text = tk.Text(self, wrap="word", height=8, width=80, 
+                font=TEXTBOX_FONT)
+        self.output_text.pack(pady=10)
+        self.output_text.insert("1.0", "Source details will appear here.\n")
+        self.output_text.config(state="disabled")  # Make it read-only initially
+
+    def check_source(self):
+        # Get the input source
+        source_name = self.source_input.get().strip()
+
+        # Check the source and print the dictionary values
+        self.output_text.config(state="normal")  # Allow editing temporarily
+        self.output_text.delete("1.0", tk.END)  # Clear existing text
+
+        dt = datetime.datetime.now(
+                tz=pytz.timezone(DEFAULT_TZ))
+        try:
+            source_info = check.check_source_str(dt, sourcename=source_name)
+            source_info = source_info.replace("\n", "\n ")
+            self.output_text.insert("1.0", source_info)
+        except Exception as e:
+            #self.parent.write_status("check source failed", fg='red')
+            #self.parent.write_status(e.args[0], fg='red')
+            text = f"Source '{source_name}' not found.\n"
+            text += "Error:\n"
+            text += str(e.args[0]) + "\n"
+            self.output_text.insert("1.0", text)
+
+        
+        #if source_name == source_data['object']:
+        #    output = "\n".join(f"{key}: {value}" for key, value in source_data.items())
+        #    self.output_text.insert("1.0", f"Details for source '{source_name}':\n{output}\n")
+        #else:
+        #    self.output_text.insert("1.0", f"Source '{source_name}' not found.\n")
+        
+        self.output_text.config(state="disabled")  # Make it read-only again
+
+
+
+class TelescopeSchedulerApp(tk.Tk):
+    def __init__(self, args):
+        #self.root = root
+        super().__init__()
+        self.title("Allen Telescope Array Scheduler")
 
         # Set window size to 1200x900
-        self.root.geometry("1600x850")
+        self.geometry("1700x900")
         self.interrupt_flag = False
         self.to_enable_disable = [] #list of everything to enable and disable
         self.to_readonly_disable = [] # same as above, but return to readonly
@@ -248,15 +345,21 @@ class TelescopeSchedulerApp:
         self.load_backends_json()
         self.load_postprocessors_json()
 
-        self.enable_slack = ENABLE_SLACK
+        self.debug = args.debug
+        self.ignore_check_schedule = args.ignore_check
+
+        if self.debug:
+            self.enable_slack = False
+        else:
+            self.enable_slack = True
 
         # Configure the root grid layout to have two columns
         #self.root.grid_columnconfigure(0, weight=1)  # Left frame
         #self.root.grid_columnconfigure(1, weight=1)  # Right frame
 
         # Create the left and right frames
-        self.frame_left = tk.Frame(self.root)
-        self.frame_right = tk.Frame(self.root)
+        self.frame_left = tk.Frame(self)
+        self.frame_right = tk.Frame(self)
 
         self.frame_left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.frame_right.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
@@ -319,12 +422,14 @@ class TelescopeSchedulerApp:
         listbox_button_frame.grid(row=2, column=1, sticky="nsew", padx=5, pady=6)
 
         # Add the "Duplicate Entry" button
-        duplicate_button = tk.Button(listbox_button_frame, text="Duplicate Entries", command=self.duplicate_entry, font=NORMAL_FONT)
+        duplicate_button = tk.Button(listbox_button_frame, text="Duplicate Entries", 
+                command=self.duplicate_entry, font=NORMAL_FONT)
         duplicate_button.pack(side=tk.LEFT, padx=10, pady=12, fill=tk.BOTH)
         self.to_enable_disable.append(duplicate_button)
 
         # Add the "Delete Entry" button
-        delete_button = tk.Button(listbox_button_frame, text="Delete Entries", command=self.delete_entry, font=NORMAL_FONT)
+        delete_button = tk.Button(listbox_button_frame, text="Delete Entries", 
+                command=self.delete_entry, font=NORMAL_FONT)
         delete_button.pack(side=tk.RIGHT, padx=0)
         self.to_enable_disable.append(delete_button)
 
@@ -341,13 +446,13 @@ class TelescopeSchedulerApp:
         #progress_bar.start()
 
         # Bind the "Q" key to delete the selected entry
-        self.root.bind("<d>", self.delete_entry)
+        self.bind("<d>", self.delete_entry)
 
         # Bind the "BackSpace" key to delete the selected entry
-        self.root.bind("<BackSpace>", self.delete_entry)
+        self.bind("<BackSpace>", self.delete_entry)
 
         # Bind the "Escape" key to reset the selection
-        self.root.bind("<Escape>", self.reset_selection)
+        self.bind("<Escape>", self.reset_selection)
 
         # WF: removed all dragging stuff, will replace by buttons
         # Initialize dragging variables
@@ -363,35 +468,65 @@ class TelescopeSchedulerApp:
         self.setup_right_frame()
 
         # Create a menu bar
-        self.menu_bar = tk.Menu(self.root)
-        self.root.config(menu=self.menu_bar)
+        self.menu_bar = tk.Menu(self)
+        self.config(menu=self.menu_bar)
 
         # Add File menu to the menubar 
         file_menu = tk.Menu(self.menu_bar, tearoff=0)
-        self.menu_bar.add_cascade(label="File", menu=file_menu, font=NORMAL_FONT)
-        file_menu.add_command(label="New", command=self.new_schedule, font=NORMAL_FONT)
-        file_menu.add_command(label="Open", command=self.open_schedule, font=NORMAL_FONT)
-        file_menu.add_command(label="Save", command=self.save_schedule, font=NORMAL_FONT)
+        self.menu_bar.add_cascade(label="File", menu=file_menu, 
+                font=NORMAL_FONT)
+        file_menu.add_command(label="New", command=self.new_schedule, 
+                font=NORMAL_FONT)
+        file_menu.add_command(label="Open", command=self.open_schedule, 
+                font=NORMAL_FONT)
+        file_menu.add_command(label="Save", command=self.save_schedule, 
+                font=NORMAL_FONT)
         file_menu.add_separator()
-        file_menu.add_command(label="Quit", command=self.check_if_modified_and_quit, font=NORMAL_FONT)
+        file_menu.add_command(label="Quit", command=self.check_if_modified_and_quit, 
+                font=NORMAL_FONT)
+
+        # Add Source menu to the menubar
+        source_menu = tk.Menu(self.menu_bar, tearoff=0)
+        self.menu_bar.add_cascade(label="Source", menu=source_menu, 
+                font=NORMAL_FONT)
+        source_menu.add_command(label="Check source", 
+                command=self.open_check_source, font=NORMAL_FONT)
 
         # Add Help menu to the menubar
         log_menu = tk.Menu(self.menu_bar, tearoff=0)
-        self.menu_bar.add_cascade(label="Log", menu=log_menu, font=NORMAL_FONT)
-        log_menu.add_command(label="Show log", command=self.open_log_window, font=NORMAL_FONT)
+        self.menu_bar.add_cascade(label="Log", menu=log_menu, 
+                font=NORMAL_FONT)
+        log_menu.add_command(label="Show log", 
+                command=self.open_log_window, font=NORMAL_FONT)
 
 
         # Add Help menu to the menubar
         help_menu = tk.Menu(self.menu_bar, tearoff=0)
-        self.menu_bar.add_cascade(label="Help", menu=help_menu, font=NORMAL_FONT)
-        help_menu.add_command(label="How to Use", command=self.show_help, font=NORMAL_FONT)
+        self.menu_bar.add_cascade(label="Help", menu=help_menu, 
+                font=NORMAL_FONT)
+        help_menu.add_command(label="How to Use", command=self.show_help, 
+                font=NORMAL_FONT)
         help_menu.add_separator()
         help_menu.add_command(label="About", font=NORMAL_FONT)
 
         # check if schedule is modified before exiting
-        self.root.protocol("WM_DELETE_WINDOW", self.check_if_modified_and_quit)
+        self.protocol("WM_DELETE_WINDOW", self.check_if_modified_and_quit)
         # Add log
-        self.log_window = LogWindow(self.root)
+        self.log_window = LogWindow(self)
+
+        logging.basicConfig(
+            level=logging.INFO,  # Set the minimum logging level
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',  # Log format
+            handlers=[
+                logging.FileHandler("app.log"),  # Log to a file
+                logging.StreamHandler()         # Log to the console
+            ]
+        )
+
+        self.logger = logging.getLogger("ATAObsSchedulerLogger")
+
+        if self.debug:
+            self.write_status("Running scheduler in debug mode")
         
 
     def setup_right_frame(self):
@@ -410,10 +545,10 @@ class TelescopeSchedulerApp:
         self.button_frame.pack(fill=tk.X, padx=10, pady=10)
 
         self.antenna_frame = tk.Frame(self.antenna_observer_frame, bd=2, relief=tk.SUNKEN)
-        self.antenna_frame.pack(fill=tk.Y, expand=True, side=tk.LEFT, pady=2)
+        self.antenna_frame.pack(fill='both', expand=True, side=tk.LEFT, pady=2)
 
         antenna_label = tk.Label(self.antenna_frame, text="Select Antennas & Recorders", font=TITLE_FONT)
-        antenna_label.pack(fill=tk.X, pady=2)
+        antenna_label.pack(pady=2)
 
         antenna_inner_frame = tk.Frame(self.antenna_frame)
         antenna_inner_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -563,7 +698,7 @@ class TelescopeSchedulerApp:
         source_frame_left.pack(fill="both", expand=True, side=tk.LEFT, pady=2)
 
         source_frame_right = tk.Frame(self.source_frame, bd=2, relief=tk.SUNKEN)
-        source_frame_right.pack(fill=tk.Y, expand=True, side=tk.LEFT, pady=2)
+        source_frame_right.pack(fill='both', expand=True, side=tk.LEFT, pady=2)
 
         # Source frame - Placeholder
         source_label = tk.Label(source_frame_left, text="Source Name and Observation Times", font=TITLE_FONT)
@@ -684,15 +819,16 @@ class TelescopeSchedulerApp:
         check_button = tk.Button(self.button_frame, text="Check Schedule", width=15,
                                  font=NORMAL_FONT, command=self.check_schedule, bg="orange")
         self.to_enable_disable.append(check_button)
-        execute_button = tk.Button(self.button_frame, text="Execute Schedule", width=15,
+        self.execute_button = tk.Button(self.button_frame, text="Execute Schedule", width=15,
                                    font=NORMAL_FONT, command=self.execute_schedule, bg="lightgreen")
-        self.to_enable_disable.append(execute_button)
+        self.to_enable_disable.append(self.execute_button)
+        self.disable_execute()
         abort_button = tk.Button(self.button_frame, text="Abort Schedule", width=15,
                                    font=NORMAL_FONT, command=self.abort_schedule, bg="red")
 
         # Pack the buttons
         check_button.pack(side=tk.LEFT, padx=10, pady=10)
-        execute_button.pack(side=tk.LEFT, padx=10, pady=10)
+        self.execute_button.pack(side=tk.LEFT, padx=10, pady=10)
         abort_button.pack(side=tk.LEFT, padx=10, pady=10)
 
     def setup_frequency_frame(self):
@@ -744,6 +880,11 @@ class TelescopeSchedulerApp:
         self.rf_gain_var = tk.IntVar(value=1)  # Checked by default
         self.if_gain_var = tk.IntVar(value=1)  # Checked by default
         self.eq_level_var = tk.IntVar(value=0)  # Unchecked by default
+        self.focus_freq_var = tk.IntVar(value=1)  # Unchecked by default
+
+        self.focus_freq = tk.Checkbutton(tuning_frame, text="Focus freq", variable=self.focus_freq_var,
+                                    font=NORMAL_FONT)
+        self.focus_freq.pack(side=tk.LEFT, padx=5)
 
         self.rf_gain_checkbox = tk.Checkbutton(tuning_frame, text="RF gain", variable=self.rf_gain_var,
                                     font=NORMAL_FONT)
@@ -757,6 +898,7 @@ class TelescopeSchedulerApp:
                                     font=NORMAL_FONT)
         self.eq_level_checkbox.pack(side=tk.LEFT, padx=5)
 
+
         # Add Frequency Setup Button
         add_frequency_button = tk.Button(checkbox_frame, text="Add Frequency Setup", command=self.add_frequency_setup,
                                     font=NORMAL_FONT,
@@ -766,6 +908,7 @@ class TelescopeSchedulerApp:
         self.to_enable_disable.append(self.rf_gain_checkbox)
         self.to_enable_disable.append(self.if_gain_checkbox)
         self.to_enable_disable.append(self.eq_level_checkbox)
+        self.to_enable_disable.append(self.focus_freq)
 
     def refresh_ant_targets(self):
         # get antenna list
@@ -843,8 +986,9 @@ class TelescopeSchedulerApp:
             entry = cmd_type + (12 - len(cmd_type))*" "
             entry += f"-- ProjectID: {project_id}, Backend: {backend}, Postprocessor: {postprocessor}"
             self.listbox.insert(tk.END, entry)
+            self.disable_execute()
         else:
-            print("Please select all fields.")
+            self.write_status("Please select all fields.", fg='orange')
 
     def add_digitizer_mode(self):
         digitizer_mode = self.digitizer_mode_dropdown.get()
@@ -854,8 +998,9 @@ class TelescopeSchedulerApp:
             entry = cmd_type + (12 - len(cmd_type))*" "
             entry += f"-- Mode: {digitizer_mode}"
             self.listbox.insert(tk.END, entry)
+            self.disable_execute()
         else:
-            print("Please select digitizer mode")
+            self.write_status("Please select digitizer mode.", fg='orange')
 
     def add_int_length_setup(self):
         # Get selected values from dropdown menus
@@ -867,7 +1012,7 @@ class TelescopeSchedulerApp:
             entry = f"-- INT_LENGTH -- Project: {project_id}, Backend: {backend}, Postprocessor: {postprocessor}"
             self.listbox.insert(tk.END, entry)
         else:
-            print("Please select all fields.")
+            self.write_status("Please select all fields.", fg='orange')
 
     def add_frequency_setup(self):
         # Get tuning values and checkboxes
@@ -876,17 +1021,23 @@ class TelescopeSchedulerApp:
         rf_gain = self.rf_gain_var.get()
         if_gain = self.if_gain_var.get()
         eq_level = self.eq_level_var.get()
+        focus_freq = self.focus_freq_var.get() 
 
         # Format the entry for the frequency setup
         cmd_type = "SETFREQ"
         entry = cmd_type + (12 - len(cmd_type)) * " "
-        entry += f"-- TuningA: {tuning_a}, TuningB: {tuning_b}, RFgain: {rf_gain}, IFgain: {if_gain}, EQlevel: {eq_level}"
+        entry += f"-- TuningA: {tuning_a}, TuningB: {tuning_b}, RFgain: {rf_gain}, IFgain: {if_gain}, EQlevel: {eq_level}, Focus: {focus_freq}"
         self.listbox.insert(tk.END, entry)
+        self.disable_execute()
 
     def add_source_entry(self):
         # Get values from the source name and observation time entries
         source_name = self.source_name_entry.get()
         obs_time = self.obs_time_entry.get()
+
+        if not is_positive_number(obs_time):
+            self.write_status(f"Please input a number in Obs Time", fg='red')
+            return
 
         # Check if both fields are filled
         if source_name and obs_time:
@@ -895,12 +1046,13 @@ class TelescopeSchedulerApp:
             entry = cmd_type + (12 - len(cmd_type)) * " "
             entry += f"-- Source: {source_name}, ObsTime: {obs_time}"
             self.listbox.insert(tk.END, entry)
+            self.disable_execute()
 
             # Clear the input fields after adding
             self.source_name_entry.delete(0, tk.END)
             self.obs_time_entry.delete(0, tk.END)
         else:
-            print("Please enter both source name and observation time.")
+            self.write_status("Please enter both source name and obs time.", fg='orange')
 
     def reset_time(self):
         dt_now = datetime.datetime.now(
@@ -920,6 +1072,7 @@ class TelescopeSchedulerApp:
         entry = cmd_type + (12 - len(cmd_type)) * " "
         entry += f"-- Az: 0, El: 18 "
         self.listbox.insert(tk.END, entry)
+        self.disable_execute()
 
     def duplicate_entry(self):
         # Get the selected entries
@@ -928,8 +1081,9 @@ class TelescopeSchedulerApp:
             for index in selected: #selected[::-1]:  # Reverse order to keep the positions consistent while duplicating
                 entry = self.listbox.get(index)
                 self.listbox.insert(tk.END, entry)
+                self.disable_execute()
         else:
-            print("Please select entries to duplicate.")
+            self.write_status("Please select entried to duplicate", fg='orange')
 
     def delete_entry(self, event=None):
         # Get the selected entries
@@ -937,6 +1091,7 @@ class TelescopeSchedulerApp:
         if selected:
             for index in selected[::-1]:  # Reverse order to avoid index shifting issues while deleting
                 self.listbox.delete(index)
+                self.disable_execute()
 
     def reset_selection(self, event=None):
         """Reset the selection of the listbox."""
@@ -1026,7 +1181,7 @@ class TelescopeSchedulerApp:
     def open_log_window(self):
         # Check if the log window is already open
         if self.log_window is None or not self.log_window.winfo_exists():
-            self.log_window = LogWindow(self.root)
+            self.log_window = LogWindow(self)
         else:
             self.log_window.focus()
 
@@ -1037,9 +1192,13 @@ class TelescopeSchedulerApp:
         else:
             print("Log window is not open.")
 
+    def open_check_source(self):
+        app = SourceWidget(self)
+
+
     def show_help(self):
         """Display a larger Help dialog with scrollable content."""
-        help_window = tk.Toplevel(self.root)
+        help_window = tk.Toplevel(self)
         help_window.title("Help - How to Use")
         help_window.geometry("300x150")  # Set size for larger window
 
@@ -1098,13 +1257,14 @@ class TelescopeSchedulerApp:
         self.rf_gain_var.set(1)
         self.if_gain_var.set(1)
         self.eq_level_var.set(0)
+        self.focus_freq_var.set(1)
 
         self.source_name_entry.delete(0, tk.END)
         self.obs_time_entry.delete(0, tk.END)
 
         self.listbox.delete(0, tk.END)
         self.original_listbox = ()
-        self.root.title(f"Allen Telescope Array Scheduler")
+        self.title(f"Allen Telescope Array Scheduler")
         self.write_status(text="")
 
     def check_if_modified_and_quit(self):
@@ -1123,8 +1283,8 @@ class TelescopeSchedulerApp:
                 # user didn't want to save, disregarding
                 pass
 
-        self.root.quit()
-        self.root.destroy()
+        self.quit()
+        self.destroy()
 
     def open_schedule(self):
         if self.listbox.get(0, tk.END) != self.original_listbox:
@@ -1174,7 +1334,7 @@ class TelescopeSchedulerApp:
 
         self.original_listbox = self.listbox.get(0, tk.END)
         fname = os.path.basename(filename)
-        self.root.title(f"Allen Telescope Array Scheduler - {fname}")
+        self.title(f"Allen Telescope Array Scheduler - {fname}")
         self.write_status(text="")
 
 
@@ -1188,19 +1348,7 @@ class TelescopeSchedulerApp:
                 return # User cancelled the file selection
 
             self.write_status(f"Trying to save to file: {filename}")
-            commands_str = self.listbox.get(0, tk.END)
-            data = {
-                    "commands": []
-                    }
-
-            cmd_list = []
-            for cmd in commands_str:
-                cmd_type, config = self.parse_command(cmd, supplement=False)
-                print(cmd_type, config)
-                cmd_list.append({cmd_type: config})
-
-            print(cmd_list)
-            data["commands"] = cmd_list
+            data = self.sch_listbox_to_json()
 
             with open(filename, "w") as json_file:
                 json.dump(data, json_file, indent=4)
@@ -1208,58 +1356,81 @@ class TelescopeSchedulerApp:
             raise e
         self.original_listbox = self.listbox.get(0, tk.END)
         fname = os.path.basename(filename)
-        self.root.title(f"Allen Telescope Array Scheduler - {fname}")
+        self.title(f"Allen Telescope Array Scheduler - {fname}")
+
+
+    def sch_listbox_to_list(self):
+        cmd_config = []
+        for idx, cmd in enumerate(self.listbox.get(0, tk.END)):
+            cmd_type, config = self.parse_command(cmd)
+            cmd_config.append([cmd_type, config])
+
+        return cmd_config
+
+
+    def sch_listbox_to_json(self):
+        commands_str = self.listbox.get(0, tk.END)
+        data = {
+                "commands": []
+                }
+
+        cmd_list = []
+        for cmd in commands_str:
+            cmd_type, config = self.parse_command(cmd, supplement=False)
+            cmd_list.append({cmd_type: config})
+
+        data["commands"] = cmd_list
+
+        return data
+
 
     def check_schedule(self):
-        self.write_status("'Check schedule' is temporarily unavailable..., please use the command 'ataobsplanner' instead for now",
-                fg='red')
-        return
+        self.write_status("Checking schedule")
         self.disable_everything()
-        data = self.generate_planner()
-        #filename = "./tmp_obs.json" #XXX replace with tmp file
-        json_file = tempfile.NamedTemporaryFile(mode="w", delete=False)
-        filename = json_file.name
-        json.dump(data, json_file, indent=4)
-        json_file.close()
+        cmds_cfgs = self.sch_listbox_to_list()
+        try:
+            obs = self.generate_obs_plan(cmds_cfgs)
+        except:
+            self.write_status("Check schedule failed", fg='red')
+            self.enable_everything()
+            raise
 
-        os.system(f"python ataobsplanner {filename}")
-        os.unlink(filename)
+        for cmd_type, config in cmds_cfgs:
+            if cmd_type == "WAITPROMPT":
+                t = f"WARNING: can't predict accurate observing schedule past WAITPROMPT, I will assume {WAIT_FOR_PROMPT_DEFAULT}"
+                self.write_status(t, fg='dark orange')
+
+        # Spawn a secondary plot for the obsplanner and wait until exit
+        obs_plot = ObsPlotAppSecondary(self, obs)
+        self.wait_window(obs_plot)
+
+        if obs_plot.app.plan_has_error():
+            self.write_status("Schedule has an error, please fix and check again", fg='red')
+        elif obs_plot.app.plan_has_warning():
+            self.write_status("Source might set during observing, please proceed with caution", fg='orange')
+            self.enable_execute()
+        elif obs_plot.app.plan_is_ok():
+            self.write_status("No error in plan, it is safe to execute schedule")
+            self.enable_execute()
+
         self.enable_everything()
 
-    def generate_planner(self):
-        dt = datetime.datetime.now(tz=pytz.timezone(DEFAULT_TZ))
-        start_date = dt.strftime("%m/%d/%y")
-        start_time = dt.strftime("%H:%M")
+    def enable_execute(self):
+        #self.execute_button.config(state=tk.NORMAL)
+        self.execute_button_enabled = True
 
-        # timezone should always be pacific
-        selected_timezone = DEFAULT_TZ
 
-        slew_time = True
-        overhead_toggled = False
-        sources = []
+    def disable_execute(self):
+        if self.ignore_check_schedule:
+            return
+        else:
+            #self.execute_button.config(state=tk.DISABLED)
+            self.execute_button_enabled = False
 
-        for command in self.listbox.get(0, tk.END):
-            res = parse('{cmd_type}--{cmd}', command)
-            cmd_type = res['cmd_type'].strip()
-            cmd = res['cmd'].strip()
 
-            if cmd_type == "BACKEND":
-                overhead_toggled = True
-            if cmd_type == "TRACK":
-                res = parse('Source: {source_name}, Observation Time: {obs_time}',
-                            cmd)
-                source_name = res['source_name']
-                obs_time = res['obs_time']
-                sources.append(f"{source_name}, {obs_time} sec")
-        data = {
-            "start_date": start_date,
-            "start_time": start_time,
-            "timezone": selected_timezone,
-            "initial_overhead": overhead_toggled,
-            "slew_time": True,
-            "sources": list(sources)
-        }
-        return data
+    def is_execute_enabled(self):
+        return self.execute_button_enabled
+
 
     def write_status(self, text, fg='green'):
         self.obs_status.config(text=text, fg=fg, font=NORMAL_FONT)
@@ -1268,51 +1439,92 @@ class TelescopeSchedulerApp:
             log_text = "[" + d.strftime(LOGGING_DTFMT)[:-3] + "]"
             log_text += f": {text}"
             self.log_message(log_text, color=fg)
+
+        if fg.lower() in LOGGING_INFO_COLOR:
+            self.logger.info(text)
+
+        if fg.lower() in LOGGING_WARNING_COLOR:
+            self.logger.warning(text)
+
+        if fg.lower() in LOGGING_ERROR_COLOR:
+            self.logger.error(text)
+
     
     def execute_schedule(self):
-        self.write_status("")
-        self.write_status("-")
-        self.write_status("="*79)
-        self.write_status("Starting new schedule")
-        self.write_status("="*79)
-        self.write_status("-")
-
         if self.registered_observer == "":
             self.write_status("Please register as OIC first", fg='red')
+            return
+
+        self.write_status("Executing new schedule")
+
+        if not self.is_execute_enabled():
+            self.write_status("Please run 'Check Schedule' first", fg='red')
             return
 
         self.interrupt_flag = False
         self.disable_everything()
 
         # Reserve antennas first
-        ant_list   = self.antenna_dropdown.get_selected_options()
-        config = {'ant_list': ant_list}
-        cmd_type = "RESERVEANTENNAS"
-        reserve_antennas = ScheduleExecutor(cmd_type, config, self.write_status)
-        reserve_antennas.execute()
+        try:
+            ant_list   = self.antenna_dropdown.get_selected_options()
+            config = {'ant_list': ant_list}
+            cmd_type = "RESERVEANTENNAS"
+            reserve_antennas = ScheduleExecutor(cmd_type, config, print) #XXX
+            reserve_antennas.execute()
+        except Exception as e:
+            self.enable_everything()
+            self.write_status(e.args, fg='red')
+            self.write_status("Maybe antennas already reserved? Try running 'atareleaseants' command",
+                    fg='red')
+            raise e
+
 
         # make sure I can release antennas
         cmd_type = "RELEASEANTENNAS"
-        release_antennas = ScheduleExecutor(cmd_type, config, self.write_status)
+        release_antennas = ScheduleExecutor(cmd_type, config, print) #XXX
 
-        idx = 0
-        for idx, cmd in enumerate(self.listbox.get(0, tk.END)):
-            if self.interrupt_flag:
-                self.enable_everything()
-                release_antennas.execute()
-                return
-            self.write_status(text=cmd)
-            self.change_color_of_selected_entry(idx)
+        cmds_cfgs = self.sch_listbox_to_list()
 
-            cmd_type, config = self.parse_command(cmd)
+        # I will initialize all sch lines to make sure
+        # all of them are compliant
+        schs = []
+        for cmd_cfg in cmds_cfgs:
+            cmd_type, config = cmd_cfg
             try:
-                sch = ScheduleExecutor(cmd_type, config, self.write_status)
+                sch = ScheduleExecutor(cmd_type, config, print) #XXX
             except Exception as e:
+                err_txt = f"Initializing schedule line {cmd_type} with "\
+                        f"config: {config} failed with exception:"
+                self.write_status(err_txt, fg='red')
                 self.write_status(e.args[0], fg='red')
                 self.enable_everything()
                 release_antennas.execute()
                 raise e
+            schs.append(sch)
 
+        # Let's start executing the schedule
+        for idx in range(len(cmds_cfgs)):
+            # I'll keep regenerate the ODS file 
+            self.generate_ods(cmds_cfgs[idx:])
+
+            if self.interrupt_flag:
+                # User requested interrupt
+                # Should be fine to return here because nothing is 
+                # being executed
+                self.enable_everything()
+                release_antennas.execute()
+                return
+
+            # current schedule line
+            sch      = schs[idx]
+            cmd_type = sch.action_type 
+            config   = sch.config
+
+            self.write_status(text=cmd_type)
+            self.write_status(text=config)
+            self.change_color_of_selected_entry(idx)
+
+            # now let's execute the schedule line in a thread
             task_thread = ExceptionThread(target=sch.execute)
             task_thread.start()
             while task_thread.is_alive():
@@ -1321,22 +1533,93 @@ class TelescopeSchedulerApp:
                     # by passing the interrupt flag
                     sch.interrupt()
                 time.sleep(0.5)
-                self.root.update()
+                self.update_idletasks()
 
             if task_thread.exception:
                 self.write_status(task_thread.exception.args[0], fg='red')
                 self.enable_everything()
                 release_antennas.execute()
+                task_thread.join()
                 raise task_thread.exception
 
-            #time.sleep(5)
+            # make sure to join 
+            task_thread.join()
 
-            self.root.update()
+            self.update()
+
         self.change_color_of_selected_entry(idx+1)
         idx = 0
         self.enable_everything()
         release_antennas.execute()
         self.write_status("Finished Schedule!")
+
+    def generate_obs_plan(self, cmds_cfgs):
+        dt_now = datetime.datetime.now(timezone.utc)
+
+        obs = ObsPlan(Time(dt_now), slew_time=True, obs_overhead=True)
+
+        init_position_set = False
+
+        for cmd_type, config in cmds_cfgs:
+            if not init_position_set:
+                if 'ant_list' in config:
+                    ant_list = config['ant_list']
+                    obs.set_current_position(ant_list)
+                    #print("setting antenna positions")
+                    #print(obs.current_position)
+                    init_position_set = True
+
+            if cmd_type == "SETFREQ":
+                obs.add_rf_if_overhead()
+            elif cmd_type == "BACKEND":
+                obs.add_backend_overhead()
+            elif cmd_type == "TRACK":
+                try:
+                    obs.add_obs_block(config['Source'], int(config['ObsTime'])) #this need try/except
+                except Exception as e:
+                    source = config['Source']
+                    self.write_status(f"adding source {source} failed...", fg='red')
+                    self.write_status(e.args[0], fg='red')
+                    raise e
+
+            elif cmd_type == "WAITPROMPT":
+                # I will assume the user will wait for 
+                # WAIT_FOR_PROMPT_DEFAULT
+                obs.add_wait_time(WAIT_FOR_PROMPT_DEFAULT)
+            elif cmd_type == "WAITFOR":
+                obs.add_wait_time(int(config['twait']))
+            elif cmd_type == "WAITUNTIL":
+                dt_until = datetime.datetime.strptime(config['dt'],
+                        WAIT_DTFMT)
+                obs.add_wait_until_dt(Time(dt_until))
+
+        return obs
+
+    def generate_ods(self, cmds_cfgs):
+        obs = self.generate_obs_plan(cmds_cfgs)
+
+        # not to be confused with obs :)
+        ods = ods_engine.ODS(output='ERROR')
+        ods.get_defaults_dict(ODS_DEFAULTS)
+        ods_list = []
+
+        for obs_entry in obs.obs_plan:
+            entry = {}
+            entry['src_id'] = obs_entry['object']
+            entry['src_ra_j2000_deg'] = obs_entry['ra'] * 360 / 24.
+            entry['src_dec_j2000_deg'] = obs_entry['dec']
+            entry['src_start_utc'] = obs_entry['start_time'].isot
+            entry['src_end_utc'] = obs_entry['end_time'].isot
+
+            ods_list.append(entry)
+
+        if ods_list:
+            ods.add_from_list(ods_list)
+            ods.write_ods(ODS_WRITE)
+            #tstamp = str(round(time.time(), 2))
+            #ods.write_ods(f"/home/sonata/ods_files/ods_{tstamp}.json")
+
+
     
     def abort_schedule(self):
         self.write_status("Interrupt requested!")
@@ -1399,25 +1682,25 @@ class TelescopeSchedulerApp:
                 self.listbox.itemconfig(i, {'bg': 'lightgreen'})  # Change color of selected entry
             else:
                 self.listbox.itemconfig(i, {'bg': self.listbox.cget("bg")})  # Default color for other entries
-        self.root.update()
+        self.update()
 
     def disable_everything(self):
-        self.root.update()
+        self.update()
         for button in self.to_enable_disable + self.to_readonly_disable:
             button.config(state=tk.DISABLED)
 
-        self.root.update()
+        self.update()
         #self.tuning_a.config(state=tk.DISABLED)
         #self.tuning_b.config(state=tk.DISABLED)
 
     def enable_everything(self):
-        self.root.update()
+        self.update()
         for button in self.to_enable_disable:
             button.config(state=tk.NORMAL)
         for button in self.to_readonly_disable:
             button.config(state="readonly")
 
-        self.root.update()
+        self.update()
         #self.tuning_a.config(state=tk.NORMAL)
         #self.tuning_b.config(state=tk.NORMAL)
 
@@ -1439,7 +1722,7 @@ class TelescopeSchedulerApp:
         self.backend_dropdown.set('')
         self.backend_dropdown['values'] = []
 
-        self.root.update()
+        self.update()
 
         project_id = self.projectid_dropdown.get()
         backends = list(self.projectid_mapping[project_id]['Backend'].keys())
@@ -1453,12 +1736,12 @@ class TelescopeSchedulerApp:
                 raise RuntimeError("Backend doesn't exist in config")
 
         self.backend_dropdown['values'] = backends
-        self.root.update()
+        self.update()
 
     def update_postprocessor_combobox(self, event=None):
         self.postprocessor_dropdown.set('')
         self.postprocessor_dropdown['values'] = []
-        self.root.update()
+        self.update()
 
         project_id = self.projectid_dropdown.get()
         backend = self.backend_dropdown.get()
@@ -1473,7 +1756,7 @@ class TelescopeSchedulerApp:
                 raise RuntimeError("Postprocessor doesn't exist in config")
 
         self.postprocessor_dropdown['values'] = postprocessors
-        self.root.update()
+        self.update()
 
 
     def wait_until(self, event=None):
@@ -1494,6 +1777,7 @@ class TelescopeSchedulerApp:
         cmd_type = "WAITUNTIL"
         entry = cmd_type + (12 - len(cmd_type))*" " + f"-- dt: {localized_time_str}"
         self.listbox.insert(tk.END, entry)
+        self.disable_execute()
 
         # to parse back
         # Parse the string including the timezone
@@ -1505,16 +1789,17 @@ class TelescopeSchedulerApp:
         cmd_type = "WAITPROMPT"
         entry = cmd_type + (12 - len(cmd_type))*" " + f"-- Method: prompt"
         self.listbox.insert(tk.END, entry)
-        pass
+        self.disable_execute()
 
 
     def wait_for_seconds(self, event=None):
         wait_time = self.wait_for_entry.get()
-        if wait_time:
+        if is_positive_number(wait_time):
             cmd_type = "WAITFOR"
             entry = cmd_type + (12 - len(cmd_type))*" " 
             entry += f"-- twait: {wait_time}"
             self.listbox.insert(tk.END, entry)
+            self.disable_execute()
 
 
     def start_progress_bar_indefinite(self):
@@ -1528,7 +1813,7 @@ class TelescopeSchedulerApp:
     def start_progress_bar_definite(self, tprogress):
         self.progress_var.set(0)
         self.tprogress = tprogress
-        self.root.after(1000, self.update_progress_bar, 1)
+        self.after(1000, self.update_progress_bar, 1)
 
     def update_progress_bar(self, count):
         # Update the progress bar by 1/60th of the total each second
@@ -1536,14 +1821,23 @@ class TelescopeSchedulerApp:
         self.progress_var.set(count * 100 / self.tprogress)
 
         if count < self.tprogress:
-            self.root.after(1000, self.update_progress_bar, count + 1)  # Continue updating every second
+            self.after(1000, self.update_progress_bar, count + 1)  # Continue updating every second
         else:
             print("Progress completed!")
             return
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = TelescopeSchedulerApp(root)
-    root.mainloop()
+    parser = argparse.ArgumentParser(
+            description='ATA observation scheduler')
+    parser.add_argument('-d', '--debug', help='Enable debug mode',
+            action='store_true')
+    parser.add_argument('-i', '--ignore-check', 
+            help='Make schedule file always executable; ignore check_schedule',
+            action='store_true')
+
+    args = parser.parse_args()
+
+    app = TelescopeSchedulerApp(args)
+    app.mainloop()
 
