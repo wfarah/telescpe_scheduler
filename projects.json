@@ -123,5 +123,14 @@
                 ]
             }
         }
+    },
+    "p062": {
+        "Backend": {
+            "xGPU_30s": {
+                "Postprocessor": [
+                    "cp_uvh5_p062"
+                ]
+            }
+        }
     }
 }

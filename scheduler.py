@@ -8,7 +8,8 @@ from tkcalendar import DateEntry
 from PIL import Image, ImageTk
 import json
 import time
-import threading
+import threading, multiprocessing, traceback
+import queue
 
 import argparse
 import logging
@@ -124,6 +125,26 @@ class ExceptionThread(threading.Thread):
                 self._target(*self._args, **self._kwargs)
         except Exception as e:
             self.exception = e
+
+class ExceptionProcess(multiprocessing.Process):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._pconn, self._cconn = multiprocessing.Pipe()
+        self._exception = None
+
+    def run(self):
+        try:
+            multiprocessing.Process.run(self)
+            self._cconn.send(None)
+        except Exception as e:
+            self._cconn.send(e)
+            #raise e # can also raise it here
+
+    @property
+    def exception(self):
+        if self._pconn.poll():
+            self._exception = self._pconn.recv()
+        return self._exception
 
 
 class DropdownWithCheckboxes(tk.Frame):
@@ -334,7 +355,7 @@ class TelescopeSchedulerApp(tk.Tk):
 
         # Set window size to 1200x900
         self.geometry("1700x900")
-        self.interrupt_flag = False
+        self.pipe_conn = None # multiprocess pipe to pass interrupt requests
         self.to_enable_disable = [] #list of everything to enable and disable
         self.to_readonly_disable = [] # same as above, but return to readonly
 
@@ -525,9 +546,14 @@ class TelescopeSchedulerApp(tk.Tk):
 
         self.logger = logging.getLogger("ATAObsSchedulerLogger")
 
+        # Create a queue for thread communication to the main GUI update method
+        self.task_queue = multiprocessing.Queue() #queue.Queue()
+
+        # Now start it
+        self.after(100, self.gui_process_queue)
+
         if self.debug:
             self.write_status("Running scheduler in debug mode")
-        
 
     def setup_right_frame(self):
         # Create 4 sub-frames within the right frame
@@ -645,7 +671,7 @@ class TelescopeSchedulerApp(tk.Tk):
                                    font=NORMAL_FONT)
         projectid_label.pack(side=tk.LEFT, padx=5)
         projectid_options = list(self.projectid_mapping.keys())
-        self.projectid_dropdown = ttk.Combobox(dropdown_frame, values=projectid_options, width=4,
+        self.projectid_dropdown = ttk.Combobox(dropdown_frame, values=projectid_options, width=5,
                 state = 'readonly',
                 font=FILL_FONT)  # Adjusted width
         self.projectid_dropdown.pack(side=tk.LEFT, padx=5)
@@ -1432,14 +1458,52 @@ class TelescopeSchedulerApp(tk.Tk):
         return self.execute_button_enabled
 
 
+    def gui_process_queue(self):
+        """
+        Method to process GUI application wide events that are feed back from
+        other threads.
+        This method should run in an infinite (.after(100)) loop
+        """
+        while not self.task_queue.empty():
+            params = self.task_queue.get()
+            event_name = params['event_name']
+            event_args = params['event_args']
+
+            if event_name == "log_message":
+                self.log_message(**event_args)
+
+            elif event_name == "obs_status":
+                self.obs_status.config(**event_args)
+
+            elif event_name == "change_color_of_entry":
+                self._change_color_of_selected_entry(**event_args)
+
+            elif event_name == "enable_everything":
+                self._enable_everything()
+
+            elif event_name == "disable_everything":
+                self._disable_everything()
+
+        # Schedule the next queue check
+        self.after(100, self.gui_process_queue)
+
+
     def write_status(self, text, fg='green'):
-        self.obs_status.config(text=text, fg=fg, font=NORMAL_FONT)
+        #self.obs_status.config(text=text, fg=fg, font=NORMAL_FONT)
+        event = {"event_name": "obs_status",
+                "event_args": {"text": text, "fg": fg, "font": NORMAL_FONT}}
+        self.task_queue.put(event)
+
         if text:
             d = datetime.datetime.now()
             log_text = "[" + d.strftime(LOGGING_DTFMT)[:-3] + "]"
             log_text += f": {text}"
-            self.log_message(log_text, color=fg)
+            #self.log_message(message=log_text, color=fg)
+            event = {"event_name": "log_message",
+                    "event_args": {"message": log_text, "color": fg}}
+            self.task_queue.put(event)
 
+        # logger() is thread-safe, so this can stay here (and not put in queue)
         if fg.lower() in LOGGING_INFO_COLOR:
             self.logger.info(text)
 
@@ -1449,27 +1513,60 @@ class TelescopeSchedulerApp(tk.Tk):
         if fg.lower() in LOGGING_ERROR_COLOR:
             self.logger.error(text)
 
-    
+
     def execute_schedule(self):
-        if self.registered_observer == "":
+        """
+        I am trying to seperate any GUI-related operations in the
+        _execute_schedule() function because that's run in a
+        multiprocessing.Process(). So I get everything I need here
+        and pass them as context to the function
+        """
+        #threading.Thread(target=self._execute_schedule, daemon=True).start()
+
+        # Create a pipe to trigger abort
+        send_conn, recv_conn = multiprocessing.Pipe()
+        self.pipe_conn = send_conn
+
+        context = {"registered_observer": self.registered_observer,
+                "is_execute_enabled": self.is_execute_enabled(),
+                "write_status": self.write_status,
+                "ant_list": self.antenna_dropdown.get_selected_options(),
+                "cmds_cfgs": self.sch_listbox_to_list(),
+                "recv_conn": recv_conn}
+
+        #print(self.is_execute_enabled())
+
+        multiprocessing.Process(target=self._execute_schedule,
+                args=(context,) , daemon=False).start()
+
+
+    def _execute_schedule(self, context):
+        registered_observer = context['registered_observer']
+        is_execute_enabled  = context['is_execute_enabled']
+        ant_list            = context['ant_list']
+        cmds_cfgs           = context['cmds_cfgs']
+        recv_conn           = context['recv_conn']
+
+
+        if registered_observer == "":
             self.write_status("Please register as OIC first", fg='red')
             return
 
         self.write_status("Executing new schedule")
 
-        if not self.is_execute_enabled():
+        if not is_execute_enabled:
             self.write_status("Please run 'Check Schedule' first", fg='red')
             return
 
-        self.interrupt_flag = False
+        #self.interrupt_flag = False
         self.disable_everything()
 
         # Reserve antennas first
         try:
-            ant_list   = self.antenna_dropdown.get_selected_options()
+            #ant_list   = self.antenna_dropdown.get_selected_options()
             config = {'ant_list': ant_list}
             cmd_type = "RESERVEANTENNAS"
-            reserve_antennas = ScheduleExecutor(cmd_type, config, print) #XXX
+            reserve_antennas = ScheduleExecutor(cmd_type, config, self.write_status)
             reserve_antennas.execute()
         except Exception as e:
             self.enable_everything()
@@ -1481,9 +1578,9 @@ class TelescopeSchedulerApp(tk.Tk):
 
         # make sure I can release antennas
         cmd_type = "RELEASEANTENNAS"
-        release_antennas = ScheduleExecutor(cmd_type, config, print) #XXX
+        release_antennas = ScheduleExecutor(cmd_type, config, self.write_status)
 
-        cmds_cfgs = self.sch_listbox_to_list()
+        #cmds_cfgs = self.sch_listbox_to_list()
 
         # I will initialize all sch lines to make sure
         # all of them are compliant
@@ -1491,7 +1588,7 @@ class TelescopeSchedulerApp(tk.Tk):
         for cmd_cfg in cmds_cfgs:
             cmd_type, config = cmd_cfg
             try:
-                sch = ScheduleExecutor(cmd_type, config, print) #XXX
+                sch = ScheduleExecutor(cmd_type, config, self.write_status)
             except Exception as e:
                 err_txt = f"Initializing schedule line {cmd_type} with "\
                         f"config: {config} failed with exception:"
@@ -1507,7 +1604,8 @@ class TelescopeSchedulerApp(tk.Tk):
             # I'll keep regenerate the ODS file 
             self.generate_ods(cmds_cfgs[idx:])
 
-            if self.interrupt_flag:
+            #if self.interrupt_flag:
+            if recv_conn.poll():
                 # User requested interrupt
                 # Should be fine to return here because nothing is 
                 # being executed
@@ -1525,15 +1623,15 @@ class TelescopeSchedulerApp(tk.Tk):
             self.change_color_of_selected_entry(idx)
 
             # now let's execute the schedule line in a thread
-            task_thread = ExceptionThread(target=sch.execute)
+            task_thread = ExceptionThread(target=sch.execute) #ExceptionThread(target=sch.execute)
             task_thread.start()
             while task_thread.is_alive():
-                if self.interrupt_flag:
+            #    if self.interrupt_flag:
+                if recv_conn.poll(): # received a stop
                     # try to gracefully interrupt the process 
                     # by passing the interrupt flag
                     sch.interrupt()
-                time.sleep(0.5)
-                self.update_idletasks()
+                time.sleep(0.2)
 
             if task_thread.exception:
                 self.write_status(task_thread.exception.args[0], fg='red')
@@ -1544,8 +1642,6 @@ class TelescopeSchedulerApp(tk.Tk):
 
             # make sure to join 
             task_thread.join()
-
-            self.update()
 
         self.change_color_of_selected_entry(idx+1)
         idx = 0
@@ -1622,8 +1718,16 @@ class TelescopeSchedulerApp(tk.Tk):
 
     
     def abort_schedule(self):
-        self.write_status("Interrupt requested!")
-        self.interrupt_flag = True
+        self.write_status("Interrupt requested!", fg='red')
+        if self.pipe_conn:
+            try:
+                self.pipe_conn.send("stop")
+            # means that the end of the pipe is broken, which is fine
+            # if no observation is being conducted and the user requested
+            # an interrupt
+            except BrokenPipeError as e:
+                pass
+        #self.interrupt_flag = True
 
     def parse_command(self, command, supplement=True):
         res = parse("{cmd_type} -- {cfg_str}", command)
@@ -1663,6 +1767,15 @@ class TelescopeSchedulerApp(tk.Tk):
         return cfg
 
     def change_color_of_selected_entry(self, selected_index):
+        """
+        Run this in the "queue" system
+        """
+        event = {"event_name": "change_color_of_entry",
+                "event_args": {"selected_index": selected_index}}
+        self.task_queue.put(event)
+
+
+    def _change_color_of_selected_entry(self, selected_index):
         # Get all current entries
         current_items = self.listbox.get(0, tk.END)
         
@@ -1682,25 +1795,39 @@ class TelescopeSchedulerApp(tk.Tk):
                 self.listbox.itemconfig(i, {'bg': 'lightgreen'})  # Change color of selected entry
             else:
                 self.listbox.itemconfig(i, {'bg': self.listbox.cget("bg")})  # Default color for other entries
-        self.update()
+        #self.update()
 
     def disable_everything(self):
-        self.update()
+        """
+        Run this in the "queue" system
+        """
+        event = {"event_name": "disable_everything",
+                "event_args": None}
+        self.task_queue.put(event)
+
+    def _disable_everything(self):
         for button in self.to_enable_disable + self.to_readonly_disable:
             button.config(state=tk.DISABLED)
 
-        self.update()
         #self.tuning_a.config(state=tk.DISABLED)
         #self.tuning_b.config(state=tk.DISABLED)
 
+
     def enable_everything(self):
-        self.update()
+        """
+        Run this in the "queue" system
+        """
+        event = {"event_name": "enable_everything",
+                "event_args": None}
+        self.task_queue.put(event)
+
+
+    def _enable_everything(self):
         for button in self.to_enable_disable:
             button.config(state=tk.NORMAL)
         for button in self.to_readonly_disable:
             button.config(state="readonly")
 
-        self.update()
         #self.tuning_a.config(state=tk.NORMAL)
         #self.tuning_b.config(state=tk.NORMAL)
 
@@ -1722,7 +1849,6 @@ class TelescopeSchedulerApp(tk.Tk):
         self.backend_dropdown.set('')
         self.backend_dropdown['values'] = []
 
-        self.update()
 
         project_id = self.projectid_dropdown.get()
         backends = list(self.projectid_mapping[project_id]['Backend'].keys())
@@ -1736,12 +1862,12 @@ class TelescopeSchedulerApp(tk.Tk):
                 raise RuntimeError("Backend doesn't exist in config")
 
         self.backend_dropdown['values'] = backends
-        self.update()
+        #self.update()
 
     def update_postprocessor_combobox(self, event=None):
         self.postprocessor_dropdown.set('')
         self.postprocessor_dropdown['values'] = []
-        self.update()
+        #self.update()
 
         project_id = self.projectid_dropdown.get()
         backend = self.backend_dropdown.get()
@@ -1756,7 +1882,7 @@ class TelescopeSchedulerApp(tk.Tk):
                 raise RuntimeError("Postprocessor doesn't exist in config")
 
         self.postprocessor_dropdown['values'] = postprocessors
-        self.update()
+        #self.update()
 
 
     def wait_until(self, event=None):
