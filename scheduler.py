@@ -10,6 +10,7 @@ import json
 import time
 import threading, multiprocessing, traceback
 import queue
+import gc
 
 import argparse
 import logging
@@ -356,6 +357,7 @@ class TelescopeSchedulerApp(tk.Tk):
         # Set window size to 1200x900
         self.geometry("1700x900")
         self.pipe_conn = None # multiprocess pipe to pass interrupt requests
+        self.execution_process = None #initiatilze the execution process
         self.to_enable_disable = [] #list of everything to enable and disable
         self.to_readonly_disable = [] # same as above, but return to readonly
 
@@ -1534,10 +1536,17 @@ class TelescopeSchedulerApp(tk.Tk):
                 "cmds_cfgs": self.sch_listbox_to_list(),
                 "recv_conn": recv_conn}
 
-        #print(self.is_execute_enabled())
+        _ = gc.collect()
 
-        multiprocessing.Process(target=self._execute_schedule,
-                args=(context,) , daemon=False).start()
+        if self.execution_process:
+            if self.execution_process.is_alive():
+                self.write_status("Execution process is still alive, should not happen!", fg="red")
+            self.execution_process.join()
+
+        self.execution_process = multiprocessing.Process(
+                target=self._execute_schedule,
+                args=(context,) , daemon=False)
+        self.execution_process.start()
 
 
     def _execute_schedule(self, context):
@@ -1592,10 +1601,10 @@ class TelescopeSchedulerApp(tk.Tk):
             except Exception as e:
                 err_txt = f"Initializing schedule line {cmd_type} with "\
                         f"config: {config} failed with exception:"
-                self.write_status(err_txt, fg='red')
-                self.write_status(e.args[0], fg='red')
                 self.enable_everything()
                 release_antennas.execute()
+                self.write_status(err_txt, fg='red')
+                self.write_status(e.args[0], fg='red')
                 raise e
             schs.append(sch)
 
@@ -1634,9 +1643,9 @@ class TelescopeSchedulerApp(tk.Tk):
                 time.sleep(0.2)
 
             if task_thread.exception:
-                self.write_status(task_thread.exception.args[0], fg='red')
                 self.enable_everything()
                 release_antennas.execute()
+                self.write_status(task_thread.exception.args[0], fg='red')
                 task_thread.join()
                 raise task_thread.exception
 

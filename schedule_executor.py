@@ -124,6 +124,9 @@ class Executable(ABC):
 
 
 class ReserveAntennas(Executable):
+    """
+    Executer class that reserves antennas and checks whether their LNAs are on
+    """
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -134,6 +137,19 @@ class ReserveAntennas(Executable):
         ant_list = self.config['ant_list']
         self.write_status(f"Reserving antennas: {ant_list}")
         ata_control.reserve_antennas(ant_list)
+
+        # Get LNA status, and raise an exception if any is not on
+        self.write_status("Getting LNA status")
+        lnas = ata_control.get_lnas(ant_list)
+        lnas_off = []
+
+        for ant in ant_list:
+            if not lnas[ant]['on']:
+                lnas_off.append(ant)
+
+        # At least 1 antenna has LNA off!
+        if lnas_off:
+            raise RuntimeError(f"LNAs for {lnas_off} are off!")
 
 
 class ReleaseAntennas(Executable):
